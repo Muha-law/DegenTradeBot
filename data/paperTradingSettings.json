@@ -1,0 +1,8 @@
+{
+  "enabled": true,
+  "totalBudgetUsd": 10000,
+  "positionSizeUsd": 500,
+  "takeProfitPct": 100,
+  "stopLossPct": -50,
+  "superComandoEnabled": true
+}

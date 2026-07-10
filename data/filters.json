@@ -1,0 +1,17 @@
+{
+  "minLiquidityUsd": 5000,
+  "minMarketCapUsd": 14000,
+  "maxMarketCapUsd": 75000,
+  "minVolume24hUsd": 2000,
+  "maxVolume24hUsd": 15000,
+  "minHolderCount": 0,
+  "maxTop10HolderPercent": 100,
+  "maxCreatorHolderPercent": 100,
+  "requireLpLockedOrBurned": false,
+  "requireNotHoneypot": true,
+  "requireOpenSource": false,
+  "blockMintable": false,
+  "minRiskScore": 0,
+  "maxTokenAgeMinutes": 60,
+  "requireAiScreen": true
+}

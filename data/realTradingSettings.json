@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "totalBudgetUsd": 10,
+  "positionSizeUsd": 1,
+  "takeProfitPct": 100,
+  "stopLossPct": -50,
+  "slippageBps": 500,
+  "superComandoEnabled": true,
+  "superComandoMaxCallVolumeUsd": 18000
+}

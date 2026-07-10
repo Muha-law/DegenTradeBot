@@ -1,0 +1,17 @@
+{
+  "basic": {
+    "label": "Preset Basic",
+    "description": "Targets 50%+ movers. Min market cap $5,000 — p25 of 230 historical calls that hit +50% (n=45).",
+    "overrides": { "minMarketCapUsd": 5000 }
+  },
+  "super_basic": {
+    "label": "Preset Super Basic",
+    "description": "Targets 200%+ movers. Min market cap $7,500 — p25 of historical calls that hit +200% (n=20).",
+    "overrides": { "minMarketCapUsd": 7500 }
+  },
+  "super_ultra_mega": {
+    "label": "Preset Super Ultra Mega",
+    "description": "Targets 10x+ movers. Min market cap $9,500 — p25 of historical calls that hit +1000% (n=5, small sample — treat as a starting point, not proven).",
+    "overrides": { "minMarketCapUsd": 9500 }
+  }
+}

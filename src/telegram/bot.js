@@ -1,0 +1,1419 @@
+import { Telegraf, Markup } from "telegraf";
+import { config } from "../config.js";
+import { CHAINS } from "../chains.js";
+import { getActiveChainDefs, isChainEnabled } from "../chainSettings.js";
+import { isPaused, setPaused } from "../botState.js";
+import { loadFilters, saveFilters } from "../filters/filter.js";
+import { computeRiskScore } from "../risk/riskScore.js";
+import { getBestPair, pairSummary } from "../risk/dexscreener.js";
+import { detectChains } from "../chainDetect.js";
+import {
+  addTrack,
+  getActiveTracks,
+  deactivateTrack,
+  getPaperTradingStats,
+  getClosedPaperTrades,
+  getOpenPaperTrades,
+  getPaperTradeById,
+  closePaperTrade,
+  getRealTradingStats,
+  getClosedRealTrades,
+  getOpenRealTrades,
+  getRealTradeById,
+  closeRealTrade,
+  reduceRealTrade,
+  getOpenRealTradeByToken,
+  openRealTrade,
+  recordBotUser,
+  countBotUsers,
+} from "../store/db.js";
+import { buildDigestEntries } from "../watchlist.js";
+import { loadDigestSettings, saveDigestSettings } from "../digestSettings.js";
+import { loadPresets, applyPreset } from "../presets.js";
+import { loadPaperTradingSettings, savePaperTradingSettings } from "../paperTradingSettings.js";
+import { loadRealTradingSettings, saveRealTradingSettings } from "../realTradingSettings.js";
+import { hasWallet, getWalletAddress, getNativeBalance } from "../wallet.js";
+import { sellToken, buyTokenWithNativeAmount } from "../execution/swapExecutor.js";
+import {
+  buildCallMessage,
+  buildWatchlistDigest,
+  buildPaperTradingSummary,
+  buildActiveTradesMessage,
+  buildRealTradingSummary,
+  fmtUsd,
+  fmtPrice,
+  WATCHLIST_PAGE_SIZE,
+} from "./formatMessage.js";
+
+function isSanePrice(n) {
+  return typeof n === "number" && Number.isFinite(n) && n > 0 && n < 1e12;
+}
+
+// Fetches live prices for every open paper trade and derives unrealized
+// PnL per trade plus the total — same live-price pattern as
+// renderTracklistText below, just against paper_trades instead of tracked_tokens.
+async function getOpenTradesWithLivePnl() {
+  const open = getOpenPaperTrades();
+  let totalUnrealizedUsd = 0;
+
+  const trades = await Promise.all(
+    open.map(async (t) => {
+      const chainDef = CHAINS[t.chain];
+      let currentPriceUsd = null;
+      let pnlPct = null;
+      let pnlUsd = null;
+      try {
+        const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
+        const pair = pairSummary(dexPair, t.token_address);
+        if (pair && isSanePrice(pair.priceUsd)) {
+          currentPriceUsd = pair.priceUsd;
+          pnlPct = ((currentPriceUsd - t.entry_price_usd) / t.entry_price_usd) * 100;
+          pnlUsd = t.position_size_usd * (pnlPct / 100);
+        }
+      } catch {
+        // best-effort — leave nulls if the price lookup fails for this trade
+      }
+      if (pnlUsd != null) totalUnrealizedUsd += pnlUsd;
+      return { ...t, currentPriceUsd, pnlPct, pnlUsd };
+    })
+  );
+
+  return { trades, totalUnrealizedUsd };
+}
+
+// Closes every open paper trade at its current live price. Trades whose
+// price can't be fetched are left open rather than closed at a bogus price.
+async function closeAllOpenTrades() {
+  const open = getOpenPaperTrades();
+  let closedCount = 0;
+  let totalPnlUsd = 0;
+
+  for (const t of open) {
+    const chainDef = CHAINS[t.chain];
+    if (!chainDef) continue;
+    try {
+      const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
+      const pair = pairSummary(dexPair, t.token_address);
+      if (!pair || !isSanePrice(pair.priceUsd)) continue;
+      const pnlPct = ((pair.priceUsd - t.entry_price_usd) / t.entry_price_usd) * 100;
+      const pnlUsd = t.position_size_usd * (pnlPct / 100);
+      closePaperTrade(t.id, { exitPriceUsd: pair.priceUsd, exitReason: "manual_close_all", pnlUsd, pnlPct });
+      closedCount++;
+      totalPnlUsd += pnlUsd;
+    } catch (err) {
+      console.error(`[paperTrading] closeAll failed to close ${t.symbol} (${t.chain}):`, err.message);
+    }
+  }
+
+  return { closedCount, totalPnlUsd, skippedCount: open.length - closedCount };
+}
+
+// Same live-PnL pattern as paper trading's, against real_trades instead.
+async function getOpenRealTradesWithLivePnl() {
+  const open = getOpenRealTrades();
+  let totalUnrealizedUsd = 0;
+
+  const trades = await Promise.all(
+    open.map(async (t) => {
+      const chainDef = CHAINS[t.chain];
+      let currentPriceUsd = null;
+      let pnlPct = null;
+      let pnlUsd = null;
+      try {
+        const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
+        const pair = pairSummary(dexPair, t.token_address);
+        if (pair && isSanePrice(pair.priceUsd)) {
+          currentPriceUsd = pair.priceUsd;
+          pnlPct = ((currentPriceUsd - t.entry_price_usd) / t.entry_price_usd) * 100;
+          pnlUsd = t.position_size_usd * (pnlPct / 100);
+        }
+      } catch {
+        // best-effort — leave nulls if the price lookup fails for this trade
+      }
+      if (pnlUsd != null) totalUnrealizedUsd += pnlUsd;
+      return { ...t, currentPriceUsd, pnlPct, pnlUsd };
+    })
+  );
+
+  return { trades, totalUnrealizedUsd };
+}
+
+// Unlike paper trading's close-all, this executes REAL sell transactions on
+// every open real position. Trades that fail to sell (revert, no liquidity,
+// price lookup failure) are left open and reported separately — never
+// marked closed without a confirmed on-chain sale.
+async function closeAllOpenRealTrades(settings) {
+  const open = getOpenRealTrades();
+  let closedCount = 0;
+  let totalPnlUsd = 0;
+  let failedCount = 0;
+
+  for (const t of open) {
+    const chainDef = CHAINS[t.chain];
+    if (!chainDef) continue;
+    const chain = { key: t.chain, ...chainDef };
+    try {
+      const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
+      const pair = pairSummary(dexPair, t.token_address);
+      if (!pair || !isSanePrice(pair.priceUsd)) {
+        failedCount++;
+        continue;
+      }
+      const sellResult = await sellToken(chain, t.token_address, t.token_amount_raw, settings.slippageBps);
+      const pnlUsd = sellResult.proceedsUsd - t.position_size_usd - t.entry_gas_usd - sellResult.gasUsd;
+      const pnlPct = (pnlUsd / t.position_size_usd) * 100;
+      closeRealTrade(t.id, {
+        exitPriceUsd: pair.priceUsd,
+        exitReason: "manual_close_all",
+        pnlUsd,
+        pnlPct,
+        nativeReceived: sellResult.nativeReceived,
+        exitTxHash: sellResult.txHash,
+        exitGasUsd: sellResult.gasUsd,
+      });
+      closedCount++;
+      totalPnlUsd += pnlUsd;
+    } catch (err) {
+      console.error(`[realTrading] closeAll failed to sell ${t.symbol} (${t.chain}):`, err.message);
+      failedCount++;
+    }
+  }
+
+  return { closedCount, totalPnlUsd, failedCount };
+}
+
+const ADDRESS_RE = /0x[a-fA-F0-9]{40}/;
+const PENDING_TTL_MS = 5 * 60 * 1000;
+
+// Tracks "what is this chat's next plain-text message for" after a button
+// prompt (e.g. "paste an address to track"), so free text can be routed
+// without slash commands. Expires so a stale prompt doesn't hijack an
+// unrelated later message.
+const pendingAction = new Map();
+function setPending(chatId, action) {
+  pendingAction.set(chatId, { ...action, expiresAt: Date.now() + PENDING_TTL_MS });
+}
+function takePending(chatId) {
+  const p = pendingAction.get(chatId);
+  pendingAction.delete(chatId);
+  if (!p || Date.now() > p.expiresAt) return null;
+  return p;
+}
+
+function isAdmin(ctx) {
+  if (!config.telegram.adminUserId) return true; // no admin configured — allow anyone (private bot use)
+  return String(ctx.from?.id) === config.telegram.adminUserId;
+}
+
+// Real Funds Trading passcode lock — separate from isAdmin(), which only
+// checks *who* you are. This additionally requires proving you know the
+// passcode, and re-locks after a period of inactivity so an unattended,
+// already-authenticated session doesn't stay unlocked forever.
+const REAL_UNLOCK_TTL_MS = 30 * 60 * 1000;
+const realTradingUnlockedUntil = new Map(); // chatId -> expiry timestamp
+
+function isRealTradingUnlocked(chatId) {
+  const exp = realTradingUnlockedUntil.get(chatId);
+  return Boolean(exp && Date.now() < exp);
+}
+
+function unlockRealTrading(chatId) {
+  realTradingUnlockedUntil.set(chatId, Date.now() + REAL_UNLOCK_TTL_MS);
+}
+
+// Gate for every real-trading action handler, not just the menu entry point
+// — callback data can in principle be replayed/guessed, so each handler
+// re-checks rather than trusting that reaching it means the menu was seen.
+// Returns true if the caller may proceed.
+async function requireRealTradingUnlock(ctx) {
+  if (!config.realTradingPasscode) {
+    await ctx.answerCbQuery?.("Real trading is not configured.");
+    await ctx.reply("⚠️ Real Funds Trading is locked out — no REAL_TRADING_PASSCODE is set in .env.");
+    return false;
+  }
+  if (!isRealTradingUnlocked(ctx.chat.id)) {
+    await ctx.answerCbQuery?.("Locked — enter the passcode.");
+    setPending(ctx.chat.id, { type: "realPasscode" });
+    await ctx.reply("🔒 Real Funds Trading is locked. Send the passcode to continue.");
+    return false;
+  }
+  return true;
+}
+
+function mainMenuKeyboard() {
+  const paused = isPaused();
+  return Markup.inlineKeyboard([
+    [Markup.button.callback(paused ? "▶️ Bot: OFF (tap to turn on)" : "⏸ Bot: ON (tap to turn off)", "menu:toggleBot")],
+    [Markup.button.callback("📊 Status", "menu:status"), Markup.button.callback("📋 Tracklist", "menu:tracklist")],
+    [Markup.button.callback("📜 Watchlist", "menu:watchlist"), Markup.button.callback("⚙️ Filter", "menu:filter")],
+    [Markup.button.callback("🔍 Score Token", "menu:score"), Markup.button.callback("📌 Track Token", "menu:track")],
+    [Markup.button.callback("🗑 Untrack Token", "menu:untrack"), Markup.button.callback("⛓ Chains", "menu:chains")],
+    [Markup.button.callback("📈 Paper Trading", "menu:papertrading")],
+    [Markup.button.callback("💰 Real Funds Trading", "menu:realtrading")],
+    [Markup.button.callback("📊 Bot Stats", "menu:botstats")],
+  ]);
+}
+
+function paperTradingKeyboard(settings) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback(settings.enabled ? "⏸ Pause" : "▶️ Resume", "papertoggle")],
+    [Markup.button.callback(`Budget: $${settings.totalBudgetUsd}`, "paperedit:totalBudgetUsd")],
+    [Markup.button.callback(`Position size: $${settings.positionSizeUsd}`, "paperedit:positionSizeUsd")],
+    [Markup.button.callback(`Take profit: +${settings.takeProfitPct}%`, "paperedit:takeProfitPct")],
+    [Markup.button.callback(`Stop loss: ${settings.stopLossPct}%`, "paperedit:stopLossPct")],
+    [Markup.button.callback(`🪖 Super Comando: ${settings.superComandoEnabled ? "ON (tap to turn off)" : "off (tap to turn on)"}`, "comandotoggle")],
+    [Markup.button.callback(`🪖 Comando max call volume: $${settings.superComandoMaxCallVolumeUsd}`, "paperedit:superComandoMaxCallVolumeUsd")],
+    [Markup.button.callback("📋 Active trades", "menu:paperactive"), Markup.button.callback("📜 Closed trades", "menu:paperclosed")],
+    [Markup.button.callback("🛑 Close ALL trades", "paperconfirm:closeall")],
+    [Markup.button.callback("🔄 Refresh", "menu:papertrading"), Markup.button.callback("🔙 Menu", "menu:home")],
+  ]);
+}
+
+function activeTradesKeyboard(trades = []) {
+  const rows = trades.map((t) => [Markup.button.callback(`🛑 Close #${t.id} ${t.symbol || "?"}`, `paperclosetrade:${t.id}`)]);
+  rows.push([Markup.button.callback("🔄 Refresh", "menu:paperactive")]);
+  rows.push([Markup.button.callback("🔙 Paper Trading", "menu:papertrading")]);
+  return Markup.inlineKeyboard(rows);
+}
+
+function realTradingKeyboard(settings, walletReady) {
+  const toggleAction = settings.enabled ? "realtoggle" : "realconfirm:enable";
+  const rows = [
+    [Markup.button.callback(settings.enabled ? "⏸ Pause (real money)" : "▶️ Enable REAL trading", toggleAction)],
+    [Markup.button.callback(`Budget: $${settings.totalBudgetUsd}`, "realedit:totalBudgetUsd")],
+    [Markup.button.callback(`Position size: $${settings.positionSizeUsd}`, "realedit:positionSizeUsd")],
+    [Markup.button.callback(`Take profit: +${settings.takeProfitPct}%`, "realedit:takeProfitPct")],
+    [Markup.button.callback(`Stop loss: ${settings.stopLossPct}%`, "realedit:stopLossPct")],
+    [Markup.button.callback(`Slippage: ${(settings.slippageBps / 100).toFixed(1)}%`, "realedit:slippageBps")],
+    [Markup.button.callback(`🪖 Super Comando: ${settings.superComandoEnabled ? "ON (tap to turn off)" : "off (tap to turn on)"}`, "realcomandotoggle")],
+    [Markup.button.callback(`🪖 Comando max call volume: $${settings.superComandoMaxCallVolumeUsd}`, "realedit:superComandoMaxCallVolumeUsd")],
+    [Markup.button.callback("📋 Active trades", "menu:realactive"), Markup.button.callback("📜 Closed trades", "menu:realclosed")],
+    [Markup.button.callback("🛑 Close ALL trades (sells for real)", "realconfirm:closeall")],
+    [Markup.button.callback("🔄 Refresh", "menu:realtrading"), Markup.button.callback("🔙 Menu", "menu:home")],
+  ];
+  // Manual trading terminal only appears once real trading is actually
+  // enabled — it's meaningless (and riskier to expose) while it's off.
+  if (settings.enabled) {
+    rows.splice(6, 0, [Markup.button.callback("🎯 Manual Trade", "menu:realmanual")]);
+  }
+  if (!walletReady) {
+    rows.unshift([Markup.button.callback("⚠️ No wallet configured — see .env", "menu:realtrading")]);
+  }
+  return Markup.inlineKeyboard(rows);
+}
+
+// Preset native-currency buy amounts for the manual trading terminal.
+const MANUAL_BUY_PRESETS = [0.001, 0.005, 0.01];
+const MANUAL_SELL_PERCENTS = [25, 50, 75, 100];
+// chatId -> { chainKey, tokenAddress, symbol, name } — set when the
+// terminal is rendered, read when a buy/sell button is tapped, so callback
+// data doesn't need to encode the (long) token address every time.
+const manualTradeContext = new Map();
+
+function manualTradeKeyboard(hasOpenPosition) {
+  const rows = [
+    MANUAL_BUY_PRESETS.map((amt, i) => Markup.button.callback(`Buy ${amt}`, `realbuyquick:${i}`)),
+    [Markup.button.callback("Buy custom amount", "realbuycustom")],
+  ];
+  if (hasOpenPosition) {
+    rows.push(MANUAL_SELL_PERCENTS.map((pct) => Markup.button.callback(`Sell ${pct}%`, `realsellpct:${pct}`)));
+  }
+  rows.push([Markup.button.callback("🔄 Refresh", "realmanualrefresh")]);
+  rows.push([Markup.button.callback("🔙 Real Funds Trading", "menu:realtrading")]);
+  return Markup.inlineKeyboard(rows);
+}
+
+function realActiveTradesKeyboard(trades = []) {
+  const rows = trades.map((t) => [Markup.button.callback(`🛑 Sell #${t.id} ${t.symbol || "?"}`, `realclosetrade:${t.id}`)]);
+  rows.push([Markup.button.callback("🔄 Refresh", "menu:realactive")]);
+  rows.push([Markup.button.callback("🔙 Real Funds Trading", "menu:realtrading")]);
+  return Markup.inlineKeyboard(rows);
+}
+
+function realEnableConfirmKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("✅ Yes, trade with REAL money", "realtoggle")],
+    [Markup.button.callback("❌ Cancel", "menu:realtrading")],
+  ]);
+}
+
+function realCloseAllConfirmKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("✅ Yes, sell everything for real", "realclosall")],
+    [Markup.button.callback("❌ Cancel", "menu:realtrading")],
+  ]);
+}
+
+function closeAllConfirmKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("✅ Yes, close everything", "paperclosall")],
+    [Markup.button.callback("❌ Cancel", "menu:papertrading")],
+  ]);
+}
+
+function chainsKeyboard() {
+  const rows = Object.entries(CHAINS).map(([key, def]) => [
+    Markup.button.callback(`${isChainEnabled(key) ? "✅" : "⬜"} ${def.label}`, `chaintoggle:${key}`),
+  ]);
+  rows.push([Markup.button.callback("🔙 Menu", "menu:home")]);
+  return Markup.inlineKeyboard(rows);
+}
+
+function backKeyboard() {
+  return Markup.inlineKeyboard([[Markup.button.callback("🔙 Menu", "menu:home")]]);
+}
+
+function refreshKeyboard(action) {
+  return Markup.inlineKeyboard([[Markup.button.callback("🔄 Refresh", action), Markup.button.callback("🔙 Menu", "menu:home")]]);
+}
+
+function filterKeyboard(filters) {
+  const rows = Object.entries(filters).map(([k, v]) => [Markup.button.callback(`${k}: ${v}`, `filteredit:${k}`)]);
+  rows.push([Markup.button.callback("🎯 Presets", "menu:presets")]);
+  rows.push([Markup.button.callback("🔙 Menu", "menu:home")]);
+  return Markup.inlineKeyboard(rows);
+}
+
+function presetsKeyboard() {
+  const presets = loadPresets();
+  const rows = Object.entries(presets).map(([key, p]) => [Markup.button.callback(p.label, `presetapply:${key}`)]);
+  rows.push([Markup.button.callback("🔙 Filter", "menu:filter")]);
+  return Markup.inlineKeyboard(rows);
+}
+
+function presetsText() {
+  const presets = loadPresets();
+  const lines = Object.values(presets).map((p) => `*${p.label}*\n${p.description}`);
+  return `🎯 *Presets*\n\nTap one to apply it on top of your current filter settings:\n\n${lines.join("\n\n")}`;
+}
+
+function welcomeText() {
+  const chainLabels = getActiveChainDefs().map((c) => c.label).join(", ") || "none — enable some in ⛓ Chains";
+  return [
+    "🤖 *Degen Assistant*",
+    `Status: ${isPaused() ? "⏸ PAUSED" : "🟢 running"}`,
+    `Watching: ${chainLabels}`,
+    "",
+    "*How this works:*",
+    "• It watches new token launches, filters out low-quality ones, and posts a call here (or in the channel) when one passes.",
+    "• Paste any contract address any time to get an instant risk score.",
+    "• 📜 Watchlist shows every active call and its live performance.",
+    "• 📈 Paper Trading simulates a strategy with fake money so you can see how it performs.",
+    "• 💰 Real Funds Trading executes actual on-chain trades — locked behind a passcode, off by default.",
+    "",
+    "Use the buttons below to navigate.",
+  ].join("\n");
+}
+
+function renderStatusText(stats) {
+  return [
+    "📊 *Status*",
+    "",
+    `Bot: ${isPaused() ? "⏸ PAUSED (not calling/scoring)" : "🟢 running"}`,
+    `Chains: ${getActiveChainDefs().map((c) => c.label).join(", ") || "none"}`,
+    `Tokens seen: ${stats.seen}`,
+    `Tokens called: ${stats.called}`,
+    `Pending recheck: ${stats.pending}`,
+    `Uptime: ${Math.floor(process.uptime() / 60)}m`,
+  ].join("\n");
+}
+
+async function renderWatchlistPage(offset = 0) {
+  const entries = await buildDigestEntries();
+  return { text: buildWatchlistDigest(entries, offset), total: entries.length };
+}
+
+function watchlistKeyboard(offset, total) {
+  const { intervalMinutes } = loadDigestSettings();
+  const navRow = [];
+  if (offset > 0) navRow.push(Markup.button.callback("⬅️ Previous", `watchlistpage:${Math.max(0, offset - WATCHLIST_PAGE_SIZE)}`));
+  if (offset + WATCHLIST_PAGE_SIZE < total) navRow.push(Markup.button.callback("➡️ Show More", `watchlistpage:${offset + WATCHLIST_PAGE_SIZE}`));
+
+  const rows = [];
+  if (navRow.length) rows.push(navRow);
+  rows.push([Markup.button.callback("🔄 Update", "watchlistpage:0")]);
+  rows.push([Markup.button.callback(`⏱ Auto-update every ${intervalMinutes}m (tap to change)`, "menu:digestinterval")]);
+  rows.push([Markup.button.callback("🔙 Menu", "menu:home")]);
+  return Markup.inlineKeyboard(rows);
+}
+
+async function renderTracklistText() {
+  const tracks = getActiveTracks();
+  if (tracks.length === 0) return "📋 *Tracklist*\n\nNot tracking anything right now.";
+
+  const rows = await Promise.all(
+    tracks.map(async (t) => {
+      const chainDef = CHAINS[t.chain];
+      try {
+        const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
+        const pair = pairSummary(dexPair, t.token_address);
+        const pct = pair?.priceUsd ? ((pair.priceUsd - t.track_price_usd) / t.track_price_usd) * 100 : null;
+        return { t, pct };
+      } catch {
+        return { t, pct: null };
+      }
+    })
+  );
+
+  rows.sort((a, b) => (b.pct ?? -Infinity) - (a.pct ?? -Infinity));
+
+  const lines = rows.map(({ t, pct }, i) => {
+    const pctLabel = pct === null ? "price unavailable" : `${pct >= 0 ? "🟢+" : "🔴"}${pct.toFixed(1)}%`;
+    const tags = [t.best_milestone_hit > 0 ? `best +${t.best_milestone_hit}%` : null, t.down50_alert_sent ? "⚠️ -50% hit" : null]
+      .filter(Boolean)
+      .join(", ");
+    return `${i + 1}. *${t.symbol || "?"}* (${t.chain}) — ${pctLabel}${tags ? ` [${tags}]` : ""}\n   \`${t.token_address}\``;
+  });
+
+  return `📋 *Tracklist* (${tracks.length})\n\n${lines.join("\n\n")}`;
+}
+
+async function safeEdit(ctx, text, keyboard) {
+  try {
+    await ctx.editMessageText(text, { parse_mode: "Markdown", ...keyboard });
+  } catch (err) {
+    if (!/message is not modified/i.test(err.description || err.message || "")) {
+      console.error("editMessageText failed:", err.message);
+    }
+  }
+}
+
+async function scoreAndReply(ctx, chainKey, tokenAddress) {
+  const chainDef = CHAINS[chainKey];
+  const chain = { key: chainKey, ...chainDef };
+  const riskResult = await computeRiskScore(chain, tokenAddress);
+  const { name, symbol } = riskResult;
+  const message = buildCallMessage({ chain, tokenAddress, riskResult, name, symbol });
+  await ctx.reply(message, { parse_mode: "Markdown", ...backKeyboard() });
+}
+
+// Resolves a bare <address> (auto-detected chain) or explicit <chain>
+// <address> from a plain args array (no leading command word).
+async function resolveChainAndAddress(ctx, args, usage) {
+  let chainKey, tokenAddress;
+  if (args.length === 1) {
+    tokenAddress = args[0];
+  } else if (args.length === 2) {
+    chainKey = args[0].toLowerCase();
+    tokenAddress = args[1];
+  } else {
+    await ctx.reply(usage);
+    return null;
+  }
+
+  if (!ADDRESS_RE.test(tokenAddress)) {
+    await ctx.reply("That doesn't look like a valid contract address.");
+    return null;
+  }
+
+  if (chainKey) {
+    if (!CHAINS[chainKey]) {
+      await ctx.reply(`Unknown chain. Options: ${Object.keys(CHAINS).join(", ")}`);
+      return null;
+    }
+    return { chainKey, tokenAddress };
+  }
+
+  const chainKeys = await detectChains(tokenAddress);
+  if (chainKeys.length === 0) {
+    await ctx.reply(`Couldn't find this token on any supported chain (${Object.keys(CHAINS).join(", ")}).`);
+    return null;
+  }
+  if (chainKeys.length > 1) {
+    await ctx.reply(`Found on multiple chains (${chainKeys.join(", ")}) — send: <chain> <address>`);
+    return null;
+  }
+  return { chainKey: chainKeys[0], tokenAddress };
+}
+
+async function handleTrack(ctx, chainKey, tokenAddress) {
+  const chainDef = CHAINS[chainKey];
+  const dexPair = await getBestPair(chainDef.dexscreenerChainId, tokenAddress);
+  const pair = pairSummary(dexPair, tokenAddress);
+  if (!pair || !pair.priceUsd) return ctx.reply("Couldn't find price data for this token yet.");
+
+  addTrack({
+    chain: chainKey,
+    tokenAddress,
+    symbol: pair.symbol,
+    name: pair.name,
+    trackPriceUsd: pair.priceUsd,
+    trackMarketCapUsd: pair.marketCapUsd || null,
+    trackedAt: Date.now(),
+  });
+
+  await ctx.reply(
+    `📌 Tracking ${pair.name || "Unknown"} (${pair.symbol || "?"}) on ${chainDef.label} from $${pair.priceUsd}.\n` +
+      `I'll alert you at +50%, +100%, +200%... and if it drops 50% or 90% (dead).`,
+    { ...backKeyboard() }
+  );
+}
+
+// Renders the manual trading terminal for whatever token is currently in
+// manualTradeContext for this chat — current price/MC/liquidity, plus an
+// open-position summary if one exists. Used both on first load and every
+// subsequent refresh (after a buy/sell, or the Refresh button).
+async function renderManualTradeTerminal(ctx) {
+  const context = manualTradeContext.get(ctx.chat.id);
+  if (!context) {
+    return ctx.reply("No token selected. Tap Manual Trade again and paste a contract address.");
+  }
+  const { chainKey, tokenAddress } = context;
+  const chainDef = CHAINS[chainKey];
+  const chain = { key: chainKey, ...chainDef };
+  const dexPair = await getBestPair(chainDef.dexscreenerChainId, tokenAddress);
+  const pair = pairSummary(dexPair, tokenAddress);
+  if (!pair || !isSanePrice(pair.priceUsd)) {
+    return ctx.reply("Couldn't fetch a live price for that token right now.");
+  }
+  manualTradeContext.set(ctx.chat.id, { ...context, symbol: pair.symbol, name: pair.name });
+
+  const openPosition = getOpenRealTradeByToken(chainKey, tokenAddress);
+  const lines = [
+    `🎯 *Manual Trade* — ${pair.name || "Unknown"} (${pair.symbol || "?"}) on ${chain.label}`,
+    "",
+    `Price: $${fmtPrice(pair.priceUsd)}`,
+    `Market cap: ${fmtUsd(pair.marketCapUsd)}`,
+    `Liquidity: ${fmtUsd(pair.liquidityUsd)}`,
+  ];
+  if (openPosition) {
+    const pnlPct = ((pair.priceUsd - openPosition.entry_price_usd) / openPosition.entry_price_usd) * 100;
+    lines.push(
+      "",
+      `Open position: ${fmtUsd(openPosition.position_size_usd)} | ${pnlPct >= 0 ? "🟢+" : "🔴"}${pnlPct.toFixed(1)}%`,
+      `Entry: $${fmtPrice(openPosition.entry_price_usd)}`
+    );
+  }
+  lines.push("", `\`${tokenAddress}\``);
+
+  const text = lines.join("\n");
+  const keyboard = manualTradeKeyboard(Boolean(openPosition));
+  if (ctx.callbackQuery) await safeEdit(ctx, text, keyboard);
+  else await ctx.reply(text, { parse_mode: "Markdown", ...keyboard });
+}
+
+async function executeManualBuy(ctx, context, nativeAmount) {
+  const { chainKey, tokenAddress } = context;
+  const chainDef = CHAINS[chainKey];
+  const chain = { key: chainKey, ...chainDef };
+  const settings = loadRealTradingSettings();
+  try {
+    const result = await buyTokenWithNativeAmount(chain, tokenAddress, nativeAmount, settings.slippageBps);
+    const existing = getOpenRealTradeByToken(chainKey, tokenAddress);
+    if (existing) {
+      // Adding to an existing position — blend entry price by USD-weighted average.
+      const newTotalUsd = existing.position_size_usd + result.usdSpent;
+      const newTotalRaw = (BigInt(existing.token_amount_raw) + BigInt(result.tokenAmountRaw)).toString();
+      reduceRealTrade(existing.id, { tokenAmountRaw: newTotalRaw, positionSizeUsd: newTotalUsd });
+    } else {
+      openRealTrade({
+        chain: chainKey,
+        tokenAddress,
+        symbol: context.symbol || null,
+        name: context.name || null,
+        entryPriceUsd: result.entryPriceUsd,
+        positionSizeUsd: result.usdSpent,
+        takeProfitPct: settings.takeProfitPct,
+        stopLossPct: settings.stopLossPct,
+        entryAt: Date.now(),
+        tokenAmountRaw: result.tokenAmountRaw,
+        nativeSpent: result.nativeSpent,
+        entryTxHash: result.txHash,
+        entryGasUsd: result.gasUsd,
+      });
+    }
+    await ctx.reply(`✅ Bought ${nativeAmount} ${chainDef.nativeSymbol} (~${fmtUsd(result.usdSpent)}) — gas ${fmtUsd(result.gasUsd)}\nTx: \`${result.txHash}\``, { parse_mode: "Markdown" });
+  } catch (err) {
+    await ctx.reply(`⚠️ Buy failed: ${err.message}`);
+  }
+  await renderManualTradeTerminal(ctx);
+}
+
+async function executeManualSell(ctx, context, pct) {
+  const { chainKey, tokenAddress } = context;
+  const chainDef = CHAINS[chainKey];
+  const chain = { key: chainKey, ...chainDef };
+  const position = getOpenRealTradeByToken(chainKey, tokenAddress);
+  if (!position) return ctx.reply("No open position to sell.");
+  const settings = loadRealTradingSettings();
+  const sellRaw = (BigInt(position.token_amount_raw) * BigInt(pct)) / 100n;
+  if (sellRaw <= 0n) return ctx.reply("Nothing to sell.");
+  try {
+    // Live price for the DB record — proceeds/rawAmount would need the
+    // token's decimals to back out correctly, and we already have this
+    // from a real quote instead of assuming 18 decimals.
+    const dexPair = await getBestPair(chainDef.dexscreenerChainId, tokenAddress);
+    const pair = pairSummary(dexPair, tokenAddress);
+    const exitPriceUsd = pair?.priceUsd || position.entry_price_usd;
+
+    const sellResult = await sellToken(chain, tokenAddress, sellRaw.toString(), settings.slippageBps);
+    const soldFractionUsd = position.position_size_usd * (pct / 100);
+    const gasShare = pct === 100 ? position.entry_gas_usd : position.entry_gas_usd * (pct / 100);
+    const pnlUsd = sellResult.proceedsUsd - soldFractionUsd - gasShare - sellResult.gasUsd;
+    const pnlPct = (pnlUsd / soldFractionUsd) * 100;
+
+    if (pct >= 100) {
+      closeRealTrade(position.id, {
+        exitPriceUsd,
+        exitReason: "manual_sell",
+        pnlUsd,
+        pnlPct,
+        nativeReceived: sellResult.nativeReceived,
+        exitTxHash: sellResult.txHash,
+        exitGasUsd: sellResult.gasUsd,
+      });
+    } else {
+      const remainingRaw = (BigInt(position.token_amount_raw) - sellRaw).toString();
+      const remainingUsd = position.position_size_usd - soldFractionUsd;
+      reduceRealTrade(position.id, { tokenAmountRaw: remainingRaw, positionSizeUsd: remainingUsd });
+    }
+    await ctx.reply(
+      `✅ Sold ${pct}% — proceeds ${fmtUsd(sellResult.proceedsUsd)} (${pnlUsd >= 0 ? "+" : ""}${fmtUsd(Math.abs(pnlUsd))}, ${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}%), gas ${fmtUsd(sellResult.gasUsd)}\nTx: \`${sellResult.txHash}\``,
+      { parse_mode: "Markdown" }
+    );
+  } catch (err) {
+    await ctx.reply(`⚠️ Sell failed: ${err.message}`);
+  }
+  await renderManualTradeTerminal(ctx);
+}
+
+async function handlePendingAction(ctx, pending, text, digestControls) {
+  if (pending.type === "filter") {
+    const filters = loadFilters();
+    const prev = filters[pending.key];
+    const nextValue = typeof prev === "boolean" ? text.trim().toLowerCase() === "true" : Number(text.trim());
+    if (typeof prev === "number" && Number.isNaN(nextValue)) {
+      return ctx.reply("That doesn't look like a valid number — tap the setting again to retry.");
+    }
+    filters[pending.key] = nextValue;
+    saveFilters(filters);
+    return ctx.reply(`Updated *${pending.key}*: ${prev} → ${nextValue}`, { parse_mode: "Markdown", ...backKeyboard() });
+  }
+
+  if (pending.type === "digestInterval") {
+    const minutes = Number(text.trim());
+    if (!Number.isFinite(minutes) || minutes < 1) {
+      return ctx.reply("That doesn't look like a valid number of minutes — tap the setting again to retry.");
+    }
+    saveDigestSettings({ intervalMinutes: Math.round(minutes) });
+    digestControls.reschedule();
+    return ctx.reply(`Auto-update interval set to ${Math.round(minutes)}m.`, { ...backKeyboard() });
+  }
+
+  if (pending.type === "paperTrading") {
+    const value = Number(text.trim());
+    if (!Number.isFinite(value)) {
+      return ctx.reply("That doesn't look like a valid number — tap the setting again to retry.");
+    }
+    const settings = loadPaperTradingSettings();
+    const prev = settings[pending.key];
+    settings[pending.key] = value;
+    savePaperTradingSettings(settings);
+    return ctx.reply(`Updated *${pending.key}*: ${prev} → ${value}`, { parse_mode: "Markdown", ...backKeyboard() });
+  }
+
+  if (pending.type === "realPasscode") {
+    if (!config.realTradingPasscode) {
+      return ctx.reply("⚠️ Real Funds Trading is locked out — no REAL_TRADING_PASSCODE is set in .env.");
+    }
+    if (text.trim() !== config.realTradingPasscode) {
+      return ctx.reply("❌ Wrong passcode.");
+    }
+    unlockRealTrading(ctx.chat.id);
+    const settings = loadRealTradingSettings();
+    const stats = getRealTradingStats();
+    const { totalUnrealizedUsd } = await getOpenRealTradesWithLivePnl();
+    const walletAddress = getWalletAddress();
+    return ctx.reply(
+      buildRealTradingSummary({ settings, stats, unrealizedPnlUsd: totalUnrealizedUsd, walletAddress, walletBalances: [] }),
+      { parse_mode: "Markdown", ...realTradingKeyboard(settings, hasWallet()) }
+    );
+  }
+
+  if (pending.type === "realTrading") {
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const value = Number(text.trim());
+    if (!Number.isFinite(value)) {
+      return ctx.reply("That doesn't look like a valid number — tap the setting again to retry.");
+    }
+    const settings = loadRealTradingSettings();
+    const prev = settings[pending.key];
+    settings[pending.key] = value;
+    saveRealTradingSettings(settings);
+    let note = "";
+    if (pending.key === "positionSizeUsd" && value > 50) {
+      note = "\n⚠️ Trades execute a hard-coded $50/trade safety ceiling regardless of this setting — this value won't actually be used above that.";
+    }
+    return ctx.reply(`Updated *${pending.key}*: ${prev} → ${value}${note}`, { parse_mode: "Markdown", ...backKeyboard() });
+  }
+
+  if (pending.type === "realManualBuyAmount") {
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const amount = Number(text.trim());
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return ctx.reply("That doesn't look like a valid amount — tap Buy custom amount again to retry.");
+    }
+    const context = manualTradeContext.get(ctx.chat.id);
+    if (!context) return ctx.reply("Session expired — reopen Manual Trade.");
+    await ctx.reply(`Buying ${amount}…`);
+    return executeManualBuy(ctx, context, amount);
+  }
+
+  const args = text.trim().split(/\s+/).filter(Boolean);
+  const usage = "Send a contract address, or `<chain> <address>` if it's listed on more than one.";
+  const resolved = await resolveChainAndAddress(ctx, args, usage);
+  if (!resolved) return;
+  const { chainKey, tokenAddress } = resolved;
+
+  try {
+    if (pending.type === "score") {
+      await ctx.reply("Analyzing…");
+      await scoreAndReply(ctx, chainKey, tokenAddress);
+    } else if (pending.type === "track") {
+      await handleTrack(ctx, chainKey, tokenAddress);
+    } else if (pending.type === "untrack") {
+      const removed = deactivateTrack(chainKey, tokenAddress);
+      await ctx.reply(removed ? "Stopped tracking." : "Wasn't tracking that token.", { ...backKeyboard() });
+    } else if (pending.type === "realManualToken") {
+      if (!(await requireRealTradingUnlock(ctx))) return;
+      manualTradeContext.set(ctx.chat.id, { chainKey, tokenAddress });
+      await renderManualTradeTerminal(ctx);
+    }
+  } catch (err) {
+    ctx.reply(`Failed: ${err.message}`);
+  }
+}
+
+export function createBot(stats, chainControls, digestControls) {
+  const bot = new Telegraf(config.telegram.botToken);
+
+  // Without this, an error thrown by any single handler (e.g. answering an
+  // expired callback query) is unhandled and takes the whole bot process
+  // down. One bad button tap should never kill the bot.
+  bot.catch((err, ctx) => {
+    console.error(`Bot handler error (update ${ctx.updateType}):`, err.message);
+  });
+
+  // Keep Telegram's "/" autocomplete minimal — buttons are the primary nav now.
+  bot.telegram.setMyCommands([{ command: "start", description: "Open the menu" }]).catch(() => {});
+
+  // Records every distinct user who's interacted with the bot at all — not
+  // just /start — so the Bot Stats count reflects actual usage.
+  bot.use((ctx, next) => {
+    if (ctx.from?.id) recordBotUser(ctx.from.id);
+    return next();
+  });
+
+  bot.command("start", (ctx) => ctx.reply(welcomeText(), { parse_mode: "Markdown", ...mainMenuKeyboard() }));
+
+  bot.action("menu:botstats", async (ctx) => {
+    await ctx.answerCbQuery();
+    const count = countBotUsers();
+    await safeEdit(ctx, `📊 *Bot Stats*\n\nUsers who've interacted with this bot: *${count}*`, backKeyboard());
+  });
+
+  bot.action("menu:home", async (ctx) => {
+    await ctx.answerCbQuery();
+    await safeEdit(ctx, welcomeText(), mainMenuKeyboard());
+  });
+
+  bot.action("menu:toggleBot", async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    const nowPaused = !isPaused();
+    setPaused(nowPaused);
+    await ctx.answerCbQuery(nowPaused ? "Bot paused" : "Bot resumed");
+    await safeEdit(ctx, welcomeText(), mainMenuKeyboard());
+  });
+
+  bot.action("menu:status", async (ctx) => {
+    await ctx.answerCbQuery();
+    await safeEdit(ctx, renderStatusText(stats), refreshKeyboard("menu:status"));
+  });
+
+  bot.action("menu:watchlist", async (ctx) => {
+    await ctx.answerCbQuery();
+    const { text, total } = await renderWatchlistPage(0);
+    await safeEdit(ctx, text, watchlistKeyboard(0, total));
+  });
+
+  bot.action(/^watchlistpage:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const offset = Number(ctx.match[1]);
+    const { text, total } = await renderWatchlistPage(offset);
+    await safeEdit(ctx, text, watchlistKeyboard(offset, total));
+  });
+
+  bot.action("menu:digestinterval", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    const { intervalMinutes } = loadDigestSettings();
+    setPending(ctx.chat.id, { type: "digestInterval" });
+    await ctx.reply(`Send the new auto-update interval in minutes (current: ${intervalMinutes}):`);
+  });
+
+  bot.action("menu:tracklist", async (ctx) => {
+    await ctx.answerCbQuery();
+    const text = await renderTracklistText();
+    await safeEdit(ctx, text, refreshKeyboard("menu:tracklist"));
+  });
+
+  bot.action("menu:filter", async (ctx) => {
+    await ctx.answerCbQuery();
+    const filters = loadFilters();
+    await safeEdit(ctx, "⚙️ *Filter Settings*\n\nTap a setting to change it:", filterKeyboard(filters));
+  });
+
+  bot.action("menu:presets", async (ctx) => {
+    await ctx.answerCbQuery();
+    await safeEdit(ctx, presetsText(), presetsKeyboard());
+  });
+
+  bot.action(/^presetapply:(.+)$/, async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    const key = ctx.match[1];
+    const presets = loadPresets();
+    if (!presets[key]) {
+      await ctx.answerCbQuery("Unknown preset.");
+      return;
+    }
+    applyPreset(key);
+    await ctx.answerCbQuery(`${presets[key].label} applied`);
+    const filters = loadFilters();
+    await safeEdit(ctx, "⚙️ *Filter Settings*\n\nTap a setting to change it:", filterKeyboard(filters));
+  });
+
+  bot.action(/^filteredit:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized to change filters.");
+    const key = ctx.match[1];
+    const filters = loadFilters();
+    if (!(key in filters)) return ctx.reply("Unknown filter key.");
+    setPending(ctx.chat.id, { type: "filter", key });
+    await ctx.reply(`Send the new value for *${key}* (current: ${filters[key]}):`, { parse_mode: "Markdown" });
+  });
+
+  bot.action("menu:score", async (ctx) => {
+    await ctx.answerCbQuery();
+    setPending(ctx.chat.id, { type: "score" });
+    await ctx.reply("Paste the contract address you want to score.");
+  });
+
+  bot.action("menu:track", async (ctx) => {
+    await ctx.answerCbQuery();
+    setPending(ctx.chat.id, { type: "track" });
+    await ctx.reply("Paste the contract address you want to track.");
+  });
+
+  bot.action("menu:untrack", async (ctx) => {
+    await ctx.answerCbQuery();
+    setPending(ctx.chat.id, { type: "untrack" });
+    await ctx.reply("Paste the contract address you want to stop tracking.");
+  });
+
+  bot.action("menu:chains", async (ctx) => {
+    await ctx.answerCbQuery();
+    await safeEdit(ctx, "⛓ *Chains*\n\nTap a chain to turn its watcher on or off:", chainsKeyboard());
+  });
+
+  bot.action("menu:papertrading", async (ctx) => {
+    await ctx.answerCbQuery();
+    const settings = loadPaperTradingSettings();
+    const stats = getPaperTradingStats();
+    const { totalUnrealizedUsd } = await getOpenTradesWithLivePnl();
+    await safeEdit(ctx, buildPaperTradingSummary({ settings, stats, unrealizedPnlUsd: totalUnrealizedUsd }), paperTradingKeyboard(settings));
+  });
+
+  bot.action("papertoggle", async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    const settings = loadPaperTradingSettings();
+    settings.enabled = !settings.enabled;
+    savePaperTradingSettings(settings);
+    await ctx.answerCbQuery(settings.enabled ? "Paper trading resumed" : "Paper trading paused");
+    const stats = getPaperTradingStats();
+    const { totalUnrealizedUsd } = await getOpenTradesWithLivePnl();
+    await safeEdit(ctx, buildPaperTradingSummary({ settings, stats, unrealizedPnlUsd: totalUnrealizedUsd }), paperTradingKeyboard(settings));
+  });
+
+  bot.action("comandotoggle", async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    const settings = loadPaperTradingSettings();
+    settings.superComandoEnabled = !settings.superComandoEnabled;
+    savePaperTradingSettings(settings);
+    await ctx.answerCbQuery(settings.superComandoEnabled ? "Super Comando ON" : "Super Comando off");
+    const stats = getPaperTradingStats();
+    const { totalUnrealizedUsd } = await getOpenTradesWithLivePnl();
+    await safeEdit(ctx, buildPaperTradingSummary({ settings, stats, unrealizedPnlUsd: totalUnrealizedUsd }), paperTradingKeyboard(settings));
+  });
+
+  bot.action("menu:paperactive", async (ctx) => {
+    await ctx.answerCbQuery();
+    const { trades, totalUnrealizedUsd } = await getOpenTradesWithLivePnl();
+    trades.sort((a, b) => (b.pnlPct ?? -Infinity) - (a.pnlPct ?? -Infinity));
+    await safeEdit(ctx, buildActiveTradesMessage({ trades, totalUnrealizedUsd }), activeTradesKeyboard(trades));
+  });
+
+  bot.action("paperconfirm:closeall", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    const openCount = getOpenPaperTrades().length;
+    if (openCount === 0) return safeEdit(ctx, "No open trades to close.", paperTradingKeyboard(loadPaperTradingSettings()));
+    await safeEdit(ctx, `⚠️ Close all ${openCount} open paper trade(s) at current market price? This can't be undone.`, closeAllConfirmKeyboard());
+  });
+
+  bot.action("paperclosall", async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    await ctx.answerCbQuery("Closing all trades…");
+    const { closedCount, totalPnlUsd, skippedCount } = await closeAllOpenTrades();
+    const lines = [
+      `🛑 *Closed ${closedCount} paper trade(s)*`,
+      `PnL from this batch: ${totalPnlUsd >= 0 ? "+" : "-"}$${Math.abs(totalPnlUsd).toFixed(2)}`,
+    ];
+    if (skippedCount > 0) lines.push(`⚠️ ${skippedCount} trade(s) skipped — couldn't fetch a current price, left open.`);
+    const settings = loadPaperTradingSettings();
+    const stats = getPaperTradingStats();
+    const { totalUnrealizedUsd } = await getOpenTradesWithLivePnl();
+    await safeEdit(
+      ctx,
+      `${lines.join("\n")}\n\n${buildPaperTradingSummary({ settings, stats, unrealizedPnlUsd: totalUnrealizedUsd })}`,
+      paperTradingKeyboard(settings)
+    );
+  });
+
+  bot.action(/^paperclosetrade:(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    const id = Number(ctx.match[1]);
+    const t = getPaperTradeById(id);
+    if (!t || t.status !== "open") {
+      await ctx.answerCbQuery("Already closed or not found.");
+      return;
+    }
+    await ctx.answerCbQuery(`Closing #${id}…`);
+    const chainDef = CHAINS[t.chain];
+    try {
+      const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
+      const pair = pairSummary(dexPair, t.token_address);
+      if (!pair || !isSanePrice(pair.priceUsd)) {
+        return safeEdit(ctx, `⚠️ Couldn't fetch a current price for ${t.symbol || t.token_address} — left open.`, activeTradesKeyboard(getOpenPaperTrades()));
+      }
+      const pnlPct = ((pair.priceUsd - t.entry_price_usd) / t.entry_price_usd) * 100;
+      const pnlUsd = t.position_size_usd * (pnlPct / 100);
+      closePaperTrade(id, { exitPriceUsd: pair.priceUsd, exitReason: "manual_close", pnlUsd, pnlPct });
+    } catch (err) {
+      return safeEdit(ctx, `⚠️ Failed to close #${id}: ${err.message}`, activeTradesKeyboard(getOpenPaperTrades()));
+    }
+    const { trades, totalUnrealizedUsd } = await getOpenTradesWithLivePnl();
+    trades.sort((a, b) => (b.pnlPct ?? -Infinity) - (a.pnlPct ?? -Infinity));
+    await safeEdit(ctx, buildActiveTradesMessage({ trades, totalUnrealizedUsd }), activeTradesKeyboard(trades));
+  });
+
+  bot.action(/^paperedit:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    const key = ctx.match[1];
+    const settings = loadPaperTradingSettings();
+    if (!(key in settings)) return ctx.reply("Unknown setting.");
+    setPending(ctx.chat.id, { type: "paperTrading", key });
+    await ctx.reply(`Send the new value for *${key}* (current: ${settings[key]}):`, { parse_mode: "Markdown" });
+  });
+
+  bot.action("menu:paperclosed", async (ctx) => {
+    await ctx.answerCbQuery();
+    const closed = getClosedPaperTrades(15);
+    if (closed.length === 0) {
+      return safeEdit(ctx, "📜 *Closed Paper Trades*\n\nNone yet.", backKeyboard());
+    }
+    const lines = closed.map((t) => {
+      const won = t.pnl_pct >= 0;
+      return `${won ? "🟢" : "🔴"} *${t.symbol || "?"}* — ${t.pnl_pct >= 0 ? "+" : ""}${t.pnl_pct.toFixed(1)}% (${t.exit_reason})`;
+    });
+    await safeEdit(ctx, `📜 *Closed Paper Trades* (last ${closed.length})\n\n${lines.join("\n")}`, backKeyboard());
+  });
+
+  async function renderRealTradingView(ctx) {
+    const settings = loadRealTradingSettings();
+    const stats = getRealTradingStats();
+    const { totalUnrealizedUsd } = await getOpenRealTradesWithLivePnl();
+    const walletAddress = getWalletAddress();
+    let walletBalances = [];
+    if (walletAddress) {
+      walletBalances = await Promise.all(
+        Object.entries(CHAINS).map(async ([key, def]) => {
+          const chain = { key, ...def };
+          const bal = await getNativeBalance(chain).catch(() => null);
+          return { label: def.label, balance: bal ?? 0, symbol: def.nativeSymbol };
+        })
+      );
+    }
+    await safeEdit(
+      ctx,
+      buildRealTradingSummary({ settings, stats, unrealizedPnlUsd: totalUnrealizedUsd, walletAddress, walletBalances }),
+      realTradingKeyboard(settings, hasWallet())
+    );
+  }
+
+  bot.action("menu:realtrading", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    await renderRealTradingView(ctx);
+  });
+
+  bot.action("menu:realmanual", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const settings = loadRealTradingSettings();
+    if (!settings.enabled) return ctx.reply("Manual Trade is only available once real trading is enabled.");
+    setPending(ctx.chat.id, { type: "realManualToken" });
+    await ctx.reply("Paste the contract address you want to trade.");
+  });
+
+  bot.action("realmanualrefresh", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    await renderManualTradeTerminal(ctx);
+  });
+
+  bot.action(/^realbuyquick:(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const idx = Number(ctx.match[1]);
+    const amount = MANUAL_BUY_PRESETS[idx];
+    const context = manualTradeContext.get(ctx.chat.id);
+    if (!context || amount == null) return ctx.answerCbQuery("Session expired — reopen Manual Trade.");
+    await ctx.answerCbQuery(`Buying ${amount}…`);
+    await executeManualBuy(ctx, context, amount);
+  });
+
+  bot.action("realbuycustom", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const context = manualTradeContext.get(ctx.chat.id);
+    if (!context) return ctx.reply("Session expired — reopen Manual Trade.");
+    setPending(ctx.chat.id, { type: "realManualBuyAmount" });
+    await ctx.reply(`Send the amount of ${CHAINS[context.chainKey].nativeSymbol} to buy (e.g. 0.02):`);
+  });
+
+  bot.action(/^realsellpct:(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const pct = Number(ctx.match[1]);
+    const context = manualTradeContext.get(ctx.chat.id);
+    if (!context) return ctx.answerCbQuery("Session expired — reopen Manual Trade.");
+    await ctx.answerCbQuery(`Selling ${pct}%…`);
+    await executeManualSell(ctx, context, pct);
+  });
+
+  bot.action("realconfirm:enable", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    if (!hasWallet()) return safeEdit(ctx, "⚠️ No wallet configured. Add WALLET_PRIVATE_KEY to .env first.", realTradingKeyboard(loadRealTradingSettings(), false));
+    const settings = loadRealTradingSettings();
+    await safeEdit(
+      ctx,
+      `⚠️ *This trades with real money.*\n\nPosition size: $${settings.positionSizeUsd} | Budget: $${settings.totalBudgetUsd}\n\nEvery call that passes your filters will attempt a real on-chain buy. Continue?`,
+      realEnableConfirmKeyboard()
+    );
+  });
+
+  bot.action("realtoggle", async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const settings = loadRealTradingSettings();
+    if (!settings.enabled && !hasWallet()) {
+      await ctx.answerCbQuery("No wallet configured.");
+      return safeEdit(ctx, "⚠️ No wallet configured. Add WALLET_PRIVATE_KEY to .env first.", realTradingKeyboard(settings, false));
+    }
+    settings.enabled = !settings.enabled;
+    saveRealTradingSettings(settings);
+    await ctx.answerCbQuery(settings.enabled ? "🔴 REAL trading enabled" : "Real trading paused");
+    await renderRealTradingView(ctx);
+  });
+
+  bot.action("realcomandotoggle", async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const settings = loadRealTradingSettings();
+    settings.superComandoEnabled = !settings.superComandoEnabled;
+    saveRealTradingSettings(settings);
+    await ctx.answerCbQuery(settings.superComandoEnabled ? "Super Comando ON" : "Super Comando off");
+    await renderRealTradingView(ctx);
+  });
+
+  bot.action("menu:realactive", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const { trades, totalUnrealizedUsd } = await getOpenRealTradesWithLivePnl();
+    trades.sort((a, b) => (b.pnlPct ?? -Infinity) - (a.pnlPct ?? -Infinity));
+    await safeEdit(ctx, buildActiveTradesMessage({ trades, totalUnrealizedUsd }), realActiveTradesKeyboard(trades));
+  });
+
+  bot.action("realconfirm:closeall", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const openCount = getOpenRealTrades().length;
+    if (openCount === 0) return safeEdit(ctx, "No open real trades to close.", realTradingKeyboard(loadRealTradingSettings(), hasWallet()));
+    await safeEdit(
+      ctx,
+      `⚠️ Sell all ${openCount} open REAL position(s) at current market price? This executes real transactions and can't be undone.`,
+      realCloseAllConfirmKeyboard()
+    );
+  });
+
+  bot.action("realclosall", async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    await ctx.answerCbQuery("Selling all positions…");
+    const settings = loadRealTradingSettings();
+    const { closedCount, totalPnlUsd, failedCount } = await closeAllOpenRealTrades(settings);
+    const lines = [
+      `🛑 *Sold ${closedCount} real position(s)*`,
+      `PnL from this batch: ${totalPnlUsd >= 0 ? "+" : "-"}$${Math.abs(totalPnlUsd).toFixed(2)}`,
+    ];
+    if (failedCount > 0) lines.push(`⚠️ ${failedCount} position(s) failed to sell — left open, will retry automatically.`);
+    const stats = getRealTradingStats();
+    const { totalUnrealizedUsd } = await getOpenRealTradesWithLivePnl();
+    await safeEdit(
+      ctx,
+      `${lines.join("\n")}\n\n${buildRealTradingSummary({ settings, stats, unrealizedPnlUsd: totalUnrealizedUsd, walletAddress: getWalletAddress(), walletBalances: [] })}`,
+      realTradingKeyboard(settings, hasWallet())
+    );
+  });
+
+  // Sells a single open real position — unlike realclosall, this leaves
+  // every other open position untouched. Same never-mark-closed-without-a-
+  // confirmed-sale discipline as the bulk close.
+  bot.action(/^realclosetrade:(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const id = Number(ctx.match[1]);
+    const t = getRealTradeById(id);
+    if (!t || t.status !== "open") {
+      await ctx.answerCbQuery("Already closed or not found.");
+      return;
+    }
+    await ctx.answerCbQuery(`Selling #${id}…`);
+    const settings = loadRealTradingSettings();
+    const chainDef = CHAINS[t.chain];
+    try {
+      const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
+      const pair = pairSummary(dexPair, t.token_address);
+      if (!pair || !isSanePrice(pair.priceUsd)) {
+        return safeEdit(ctx, `⚠️ Couldn't fetch a current price for ${t.symbol || t.token_address} — left open.`, realActiveTradesKeyboard(getOpenRealTrades()));
+      }
+      const chain = { key: t.chain, ...chainDef };
+      const sellResult = await sellToken(chain, t.token_address, t.token_amount_raw, settings.slippageBps);
+      const pnlUsd = sellResult.proceedsUsd - t.position_size_usd - t.entry_gas_usd - sellResult.gasUsd;
+      const pnlPct = (pnlUsd / t.position_size_usd) * 100;
+      closeRealTrade(id, {
+        exitPriceUsd: pair.priceUsd,
+        exitReason: "manual_close",
+        pnlUsd,
+        pnlPct,
+        nativeReceived: sellResult.nativeReceived,
+        exitTxHash: sellResult.txHash,
+        exitGasUsd: sellResult.gasUsd,
+      });
+    } catch (err) {
+      return safeEdit(ctx, `⚠️ Failed to sell #${id}: ${err.message}`, realActiveTradesKeyboard(getOpenRealTrades()));
+    }
+    const { trades, totalUnrealizedUsd } = await getOpenRealTradesWithLivePnl();
+    trades.sort((a, b) => (b.pnlPct ?? -Infinity) - (a.pnlPct ?? -Infinity));
+    await safeEdit(ctx, buildActiveTradesMessage({ trades, totalUnrealizedUsd }), realActiveTradesKeyboard(trades));
+  });
+
+  bot.action(/^realedit:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const key = ctx.match[1];
+    const settings = loadRealTradingSettings();
+    if (!(key in settings)) return ctx.reply("Unknown setting.");
+    setPending(ctx.chat.id, { type: "realTrading", key });
+    await ctx.reply(`Send the new value for *${key}* (current: ${settings[key]}):`, { parse_mode: "Markdown" });
+  });
+
+  bot.action("menu:realclosed", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const closed = getClosedRealTrades(15);
+    if (closed.length === 0) {
+      return safeEdit(ctx, "📜 *Closed Real Trades*\n\nNone yet.", backKeyboard());
+    }
+    const lines = closed.map((t) => {
+      const won = t.pnl_pct >= 0;
+      return `${won ? "🟢" : "🔴"} *${t.symbol || "?"}* — ${t.pnl_pct >= 0 ? "+" : ""}${t.pnl_pct.toFixed(1)}% (${t.exit_reason})`;
+    });
+    await safeEdit(ctx, `📜 *Closed Real Trades* (last ${closed.length})\n\n${lines.join("\n")}`, backKeyboard());
+  });
+
+  bot.action(/^chaintoggle:(.+)$/, async (ctx) => {
+    const key = ctx.match[1];
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    if (!CHAINS[key]) {
+      await ctx.answerCbQuery("Unknown chain.");
+      return;
+    }
+    const nowEnabled = !isChainEnabled(key);
+    chainControls.toggleChain(key, nowEnabled);
+    await ctx.answerCbQuery(`${CHAINS[key].label} ${nowEnabled ? "enabled" : "disabled"}`);
+    await safeEdit(ctx, "⛓ *Chains*\n\nTap a chain to turn its watcher on or off:", chainsKeyboard());
+  });
+
+  // Slash commands still work underneath the buttons, for muscle memory.
+  bot.command("status", (ctx) => ctx.reply(renderStatusText(stats), { parse_mode: "Markdown", ...backKeyboard() }));
+  bot.command("watchlist", async (ctx) => {
+    const { text, total } = await renderWatchlistPage(0);
+    ctx.reply(text, { parse_mode: "Markdown", ...watchlistKeyboard(0, total) });
+  });
+  bot.command(["tracklist", "tracked"], async (ctx) => {
+    const text = await renderTracklistText();
+    ctx.reply(text, { parse_mode: "Markdown", ...backKeyboard() });
+  });
+  bot.command("filter", (ctx) => {
+    const filters = loadFilters();
+    ctx.reply("```\n" + JSON.stringify(filters, null, 2) + "\n```", { parse_mode: "Markdown", ...backKeyboard() });
+  });
+  bot.command("presets", (ctx) => ctx.reply(presetsText(), { parse_mode: "Markdown", ...presetsKeyboard() }));
+  bot.command("setfilter", (ctx) => {
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    const [, key, rawValue] = ctx.message.text.split(/\s+/);
+    if (!key || rawValue === undefined) return ctx.reply("Usage: /setfilter <key> <value>");
+    const filters = loadFilters();
+    if (!(key in filters)) return ctx.reply(`Unknown filter key. Valid keys: ${Object.keys(filters).join(", ")}`);
+    const prev = filters[key];
+    filters[key] = typeof prev === "boolean" ? rawValue === "true" : Number(rawValue);
+    saveFilters(filters);
+    ctx.reply(`Updated ${key}: ${prev} → ${filters[key]}`);
+  });
+  bot.command("score", async (ctx) => {
+    const args = ctx.message.text.split(/\s+/).filter(Boolean).slice(1);
+    const resolved = await resolveChainAndAddress(ctx, args, `Usage: /score <tokenAddress> or /score <chain> <tokenAddress>`);
+    if (!resolved) return;
+    await ctx.reply("Analyzing…");
+    try {
+      await scoreAndReply(ctx, resolved.chainKey, resolved.tokenAddress);
+    } catch (err) {
+      ctx.reply(`Failed to score token: ${err.message}`);
+    }
+  });
+  bot.command("track", async (ctx) => {
+    const args = ctx.message.text.split(/\s+/).filter(Boolean).slice(1);
+    const resolved = await resolveChainAndAddress(ctx, args, `Usage: /track <tokenAddress> or /track <chain> <tokenAddress>`);
+    if (!resolved) return;
+    try {
+      await handleTrack(ctx, resolved.chainKey, resolved.tokenAddress);
+    } catch (err) {
+      ctx.reply(`Failed to track token: ${err.message}`);
+    }
+  });
+  bot.command("untrack", async (ctx) => {
+    const args = ctx.message.text.split(/\s+/).filter(Boolean).slice(1);
+    const resolved = await resolveChainAndAddress(ctx, args, `Usage: /untrack <tokenAddress> or /untrack <chain> <tokenAddress>`);
+    if (!resolved) return;
+    const removed = deactivateTrack(resolved.chainKey, resolved.tokenAddress);
+    ctx.reply(removed ? "Stopped tracking." : "Wasn't tracking that token.");
+  });
+
+  // Free text: either the answer to a button prompt, or a bare pasted
+  // address (auto-scored by default with no prompt needed).
+  bot.on("text", async (ctx) => {
+    const text = ctx.message.text;
+    if (text.startsWith("/")) return;
+
+    const pending = takePending(ctx.chat.id);
+    if (pending) return handlePendingAction(ctx, pending, text, digestControls);
+
+    const match = text.match(ADDRESS_RE);
+    if (!match) return;
+    const tokenAddress = match[0];
+
+    await ctx.reply(`Looking up \`${tokenAddress}\`…`, { parse_mode: "Markdown" });
+    try {
+      const chainKeys = await detectChains(tokenAddress);
+      if (chainKeys.length === 0) {
+        return ctx.reply(
+          `Couldn't find this token on any supported chain (${Object.keys(CHAINS).join(", ")}). ` +
+            `It may be too new to be indexed yet, or on a chain this bot doesn't watch.`
+        );
+      }
+      for (const chainKey of chainKeys) {
+        await scoreAndReply(ctx, chainKey, tokenAddress);
+      }
+    } catch (err) {
+      ctx.reply(`Failed to analyze token: ${err.message}`);
+    }
+  });
+
+  return bot;
+}
+
+// Telegram hard-rejects anything over 4096 chars (e.g. a token with an
+// absurdly long name/symbol can push a normally-short message over that) —
+// truncate defensively rather than let sendMessage throw.
+const TELEGRAM_MAX_LENGTH = 4096;
+function truncateForTelegram(text) {
+  if (text.length <= TELEGRAM_MAX_LENGTH) return text;
+  return `${text.slice(0, TELEGRAM_MAX_LENGTH - 20)}\n\n… (truncated)`;
+}
+
+// Sends to every configured destination (primary chat + any signal
+// channels), independently — one destination failing (e.g. bot removed as
+// channel admin) must not block delivery to the others. Returns the primary
+// chat's message_id, since that's the only one anything else references.
+async function broadcast(bot, message) {
+  let primaryMessageId = null;
+  for (const destination of config.telegram.destinations) {
+    try {
+      const sent = await bot.telegram.sendMessage(destination, message, { parse_mode: "Markdown" });
+      if (destination === config.telegram.chatId) primaryMessageId = sent.message_id;
+    } catch (err) {
+      console.error(`Failed to send to ${destination}:`, err.message);
+    }
+  }
+  return primaryMessageId;
+}
+
+export async function postCall(bot, { chain, tokenAddress, riskResult, name, symbol }) {
+  const message = truncateForTelegram(buildCallMessage({ chain, tokenAddress, riskResult, name, symbol }));
+  return broadcast(bot, message);
+}
+
+export async function postUpdate(bot, text) {
+  return broadcast(bot, truncateForTelegram(text));
+}
