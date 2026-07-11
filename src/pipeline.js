@@ -5,6 +5,7 @@ import { postCall } from "./telegram/bot.js";
 import { openPaperTradeIfRoom } from "./paperTrading.js";
 import { openRealTradeIfRoom } from "./realTrading.js";
 import { screenForRugPatterns } from "./ai/rugDetector.js";
+import { analyzeRugRisk } from "./ai/rugAnalyst.js";
 import { getBestPair, pairSummary } from "./risk/dexscreener.js";
 
 // For each prior same-name call, fetches its current price (best-effort) so
@@ -56,14 +57,40 @@ export async function evaluateToken(bot, { chain, dexName, pairAddress, tokenAdd
   // Optional extra gate, on top of the numeric filters above — an AI read on
   // whether the name/symbol/deployer looks like a scam pattern. Toggle lives
   // in filters.json (requireAiScreen) and no-ops if no API key is configured.
+  let groqVerdict = null;
   if (filters.requireAiScreen) {
     const priorCalls = findRecentCallsByName(chain.key, name, tokenAddress);
     const namesakes = priorCalls.length ? await withPerformance(chain, priorCalls) : [];
-    const aiVerdict = await screenForRugPatterns({ name, symbol, deployerAddress: riskResult.deployerAddress, chain: chain.key, namesakes });
-    if (aiVerdict.suspicious) {
-      return { pass: false, reasons: [`AI screen flagged: ${aiVerdict.reasoning || "suspicious pattern"}`], riskResult };
+    groqVerdict = await screenForRugPatterns({ name, symbol, deployerAddress: riskResult.deployerAddress, chain: chain.key, namesakes });
+    if (groqVerdict.suspicious) {
+      return { pass: false, reasons: [`AI screen flagged: ${groqVerdict.reasoning || "suspicious pattern"}`], riskResult };
     }
   }
+
+  // Second, distinct AI gate — quantitative signals (liquidity/volume/LP-lock)
+  // weighed against real backtested base rates for this chain, catching
+  // combinations the fixed numeric thresholds above can't express. Toggle
+  // lives in filters.json (requireClaudeRugAnalysis); no-ops without an
+  // Anthropic key. Only rejects on "severe" — "elevated"/"baseline" both pass,
+  // since most tokens on this chain are elevated risk by nature (see
+  // src/ai/rugAnalyst.js) and gating on that would block nearly everything.
+  if (filters.requireClaudeRugAnalysis) {
+    const claudeVerdict = await analyzeRugRisk({
+      name,
+      symbol,
+      chain: chain.key,
+      ageMinutes: ageMinutes ?? null,
+      liquidityUsd: riskResult.pair?.liquidityUsd,
+      marketCapUsd: riskResult.pair?.marketCapUsd,
+      volume24hUsd: riskResult.pair?.volume24h,
+      lpLock: riskResult.lpLock,
+      groqVerdict,
+    });
+    if (claudeVerdict.riskLevel === "severe") {
+      return { pass: false, reasons: [`AI rug analysis flagged severe risk: ${claudeVerdict.reasoning || "no reasoning given"}`], riskResult };
+    }
+  }
+
   const messageId = await postCall(bot, { chain, tokenAddress, riskResult, name, symbol });
 
   const sec = riskResult.security;

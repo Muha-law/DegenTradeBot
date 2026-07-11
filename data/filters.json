@@ -13,5 +13,6 @@
   "blockMintable": false,
   "minRiskScore": 0,
   "maxTokenAgeMinutes": 60,
-  "requireAiScreen": true
+  "requireAiScreen": true,
+  "requireClaudeRugAnalysis": true
 }

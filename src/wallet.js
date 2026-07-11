@@ -14,7 +14,7 @@ function httpUrlFor(chain) {
   return wss.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://");
 }
 
-function getProvider(chain) {
+export function getProvider(chain) {
   if (!providerCache.has(chain.key)) {
     providerCache.set(chain.key, new JsonRpcProvider(httpUrlFor(chain)));
   }

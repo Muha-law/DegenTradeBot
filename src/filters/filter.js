@@ -41,7 +41,7 @@ export async function checkFreshLiquidity(chain, tokenAddress) {
 export function applyFilter(riskResult, tokenAgeMinutes) {
   const filters = loadFilters();
   const reasons = [];
-  const { security, pair, score } = riskResult;
+  const { security, pair, score, lpLock } = riskResult;
 
   if (score < filters.minRiskScore) reasons.push(`Risk score ${score} below minimum ${filters.minRiskScore}`);
 
@@ -96,20 +96,31 @@ export function applyFilter(riskResult, tokenAgeMinutes) {
     if (filters.requireNotHoneypot && isTrue(security.is_honeypot)) reasons.push("Flagged as honeypot");
     if (filters.requireOpenSource && !isTrue(security.is_open_source)) reasons.push("Contract not open source");
     if (filters.blockMintable && isTrue(security.is_mintable)) reasons.push("Token supply is mintable");
+  }
 
-    if (filters.requireLpLockedOrBurned) {
-      const lpHolders = security.lp_holders || [];
+  // Deliberately outside the `if (security)` block above — GoPlus doesn't
+  // cover this chain at all (security is always null here), so nesting this
+  // inside that block made it a permanent no-op regardless of the setting.
+  // Prefer GoPlus's lp_holders when available (other chains); fall back to
+  // the on-chain check (riskScore.js) otherwise.
+  if (filters.requireLpLockedOrBurned) {
+    const lpHolders = security?.lp_holders || [];
+    if (lpHolders.length > 0) {
       const lockedPct = lpHolders.reduce((sum, h) => {
         const locked = isTrue(h.is_locked) || h.tag === "Burn Address";
         return sum + (locked ? Number(h.percent) || 0 : 0);
       }, 0);
-      // No length guard here on purpose — GoPlus commonly returns an empty
-      // lp_holders array for tokens that are only seconds/minutes old (the
-      // exact tokens this bot calls), and treating "no data" as "skip the
-      // check" let every fresh launch through regardless of this setting.
-      if (lockedPct < 0.5) {
-        reasons.push(lpHolders.length > 0 ? "LP not majority locked/burned" : "LP lock status unknown (no data yet) — treated as unlocked");
+      if (lockedPct < 0.5) reasons.push("LP not majority locked/burned");
+    } else if (lpLock) {
+      if (lpLock.lockedFraction < 0.5) {
+        reasons.push(`LP not majority locked/burned (on-chain check: ${(lpLock.lockedFraction * 100).toFixed(0)}% locked)`);
       }
+    } else {
+      // No length guard here on purpose — treating "no data from either
+      // source" as "skip the check" let every fresh launch through
+      // regardless of this setting, which is exactly backwards for the
+      // freshest (highest-risk) tokens.
+      reasons.push("LP lock status unknown (no data available) — treated as unlocked");
     }
   }
 
