@@ -935,12 +935,26 @@ export function createBot(stats, chainControls, digestControls) {
     await safeEdit(ctx, `📊 *Bot Stats*\n\nUsers who've interacted with this bot: *${count}*`, backKeyboard());
   });
 
-  // No dedicated price oracle — derives a chain's native/USD rate from a
-  // recently-called token's live pair (freshly fetched, not the stale
-  // call-time snapshot). Tries several recent calls, not just the latest —
-  // on this chain the single most recent call is itself quite likely to
-  // already be a dead/delisted pair by the time anyone looks.
+  // Mainnet WETH/USD via DexScreener — one of the most liquid pairs in
+  // crypto, always live regardless of this bot's own activity. A chain's
+  // bridged "ETH" gas token tracks real ETH closely, so this is a far more
+  // reliable USD reference than anything specific to a low-volume chain.
+  const MAINNET_WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
+
+  // No dedicated price oracle. Tries the always-live mainnet ETH reference
+  // first (works regardless of this bot's own call volume); falls back to
+  // deriving from a recently-called token's live pair only for non-ETH
+  // native currencies (e.g. BNB) or if the primary lookup fails for some
+  // reason. The recent-calls path originally being the *only* source meant
+  // this silently stopped working during any quiet stretch with few/no
+  // recent calls — confirmed live on Railway after call volume dropped.
   async function getChainNativeUsdPrice(chain) {
+    if (chain.nativeSymbol === "ETH") {
+      const dexPair = await getBestPair("ethereum", MAINNET_WETH).catch(() => null);
+      const pair = pairSummary(dexPair, MAINNET_WETH);
+      if (pair?.priceUsd) return pair.priceUsd;
+    }
+
     const candidates = getRecentCalls(chain.key, 10);
     for (const call of candidates) {
       const dexPair = await getBestPair(chain.dexscreenerChainId, call.token_address).catch(() => null);
