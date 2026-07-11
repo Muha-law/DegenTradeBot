@@ -1,0 +1,1807 @@
+{
+  "analyzedAt": 1783783205084,
+  "totalChecked": 257,
+  "lockedRugRatePct": 70.4225352112676,
+  "unlockedRugRatePct": 88.17204301075269,
+  "records": [
+    {
+      "tokenAddress": "0x3C899fD6114cd542f1B2AC588F86053e21f67777",
+      "symbol": "STIMMY",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x72eB55fa85EaFa4C25048a274d7947982dE9AeCe",
+      "symbol": "Vyld",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xB3Db8f52dE1eF9a78d8a4583e75E086e2325041D",
+      "symbol": "SENTAI",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x7F49fd0d038d06151904CF06771089AA17d9bE89",
+      "symbol": "GLD",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xF69aeEb642f1Bc4eA6350a9AcB9FbF8562Cb75Cc",
+      "symbol": "SENTAI",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xb6f2D62dfD950632883EBcb19aFBFF3670EE3e55",
+      "symbol": "GLD",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x5831012D09951B1D03118AdD1aF28af43bfbd371",
+      "symbol": "💚VLAD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x95Df123f70d9D385B187f3fE5315171C299e4973",
+      "symbol": "ALLIN",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xbb1d001233bD2916b3691127d0F45f766f3b6B80",
+      "symbol": "NAVEN",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x6001363A10043D78Ba547b43fA9845c78FE2cAEF",
+      "symbol": "rhBTC",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x65B8495b0B51B13b35ed378e2198269bE01075c6",
+      "symbol": "ROB",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x241F3Caad03Db31137F641beF005A32176530024",
+      "symbol": "NPC",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x15C4f17F2A52c9Fd8B807417941FB66330Bd973F",
+      "symbol": "RAUCET",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x5C471D7df6C31EBFe85311723725CD136cB730eb",
+      "symbol": "SUPPOMAN",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xBfaD882d4a6E9Edd7889Af72126B5eBDFa3f03a6",
+      "symbol": "CASHCATSTR",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x16dE6463C0E98605Ee7236F9fB8D8F8f29D4134f",
+      "symbol": "VIBE CAT",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xD86e2192677a5F0816E9Db3CBe05AEf62cc6A80b",
+      "symbol": "NOTT",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xD9Dd2f178CE8Be63E91E7fD3f6D88E6E495DA5e5",
+      "symbol": "SNOWHOOD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xf511d824D99930d39133dc445f349108c94161cd",
+      "symbol": "OUTLAW",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x9Ca06107CB6cDB27795C5Ea7CA3531CEC2026F77",
+      "symbol": "HOODPEPE",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x98432DE547435330A879d95d8C05112E2Fb47777",
+      "symbol": "AGENTS",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0xEd83f8CE97CA055A787661723De36b4FE22b7c8B",
+      "symbol": "VRTN",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x9D2514825b806629B7718A35E7c0AA596a3696ca",
+      "symbol": "SLING",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x63F1a4b3716426c3210d7753280Fa90ac0890e31",
+      "symbol": "DBEV",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x863A34b40F2e4B2f6F396Cff5f20eF2105cAd606",
+      "symbol": "WICK",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xb838De4Ece4Ae0acb5d9aBfd6583Ed5479aF4BB1",
+      "symbol": "FLYWHEEL",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xE30b7b23C701a28F43AF4ffe06EfB80C32e5D58e",
+      "symbol": "VEX",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x1FE855874Da4049c72F3c076048880b126954323",
+      "symbol": "rhood",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xfe46A192E9a52f726fedF37D54E4be6f63BF3E9d",
+      "symbol": "TBILL",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x47e0D9d31593ed7fD9090f9673106d8f27c87777",
+      "symbol": "SCAT",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x8471C5E445DEe296Bf473004a499cB7cc2673Af1",
+      "symbol": "Cap",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x4B79912A4d6C7d5b74E90Fb0a1610B6cc3aEd3D5",
+      "symbol": "TBILL",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x64A2c16CE4893a2F1485d70F790727cE510A6cFa",
+      "symbol": "SGX",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x1Bdd31F3293aEE3Dd02E4192C35C811Ed3B180af",
+      "symbol": "ROBINDROP",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xe2Ad46FC0a68bD250F1190BF9183e62b0e39b50A",
+      "symbol": "SGX",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xEeA91c6240e7DC2C8573A44d178446120B31b2bB",
+      "symbol": "PUSSY",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x8f4a265FD3Db0Bb01a9C942f3f5EA93d97072694",
+      "symbol": "MemeHood",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x45D85C97BdD4D5582F1c7A47E4e818fC2f0283fa",
+      "symbol": "Robincat",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x810099639932524d5241633B3b757BD2790616dd",
+      "symbol": "PIXHOOD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xBA5A1cf806ece103098603520991d99B640770Cc",
+      "symbol": "ARUP",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xA26e51aDc0CbAb94bFE5e810B2d84387462eb065",
+      "symbol": "ONCHAIN",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xAdd544D07d1D1188e81dB928047Ee98e51A15016",
+      "symbol": "HDOG",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x10bD69C7eeacFB510322415e72810c3F4fe52267",
+      "symbol": "PIXHOOD",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x1cfaD2f7A7F21A728969b9701086dAC470952134",
+      "symbol": "PIXHOOD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xC84A9470db8a2276f46217C32D2D66259EE1Bc33",
+      "symbol": "PIXHOOD",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x8E85d8d3226Bd0392582D68506fE870A7406cE50",
+      "symbol": "infiniti",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x8Ff92566f2e81BDd68EDfAa8cde73942A723796b",
+      "symbol": "VEX",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x7f54FFa7773EF6716686f7845c8f479ce0dab0A3",
+      "symbol": "ARUP",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xB7960e6aEbBf973a5C5864A67E744D646AfEDef0",
+      "symbol": "REAL",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xc40565d489001aB515390f82DBE224E91C751f0F",
+      "symbol": "VEX",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xc23027944a02733c3aD253468F21854D7503E588",
+      "symbol": "infiniti",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x5fC7f13E4C52A1CA78CCbfA6711cd15F0E4Bc79F",
+      "symbol": "ALFIE",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xDB1aA98649D616Cf314f82B650a0aA23A1F7b858",
+      "symbol": "RANGER",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xBeD400e1347aE36B6497916b99C47D60C8B80fB7",
+      "symbol": "infiniti",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xe15Af3D52F70119d82211ACf5FB76f8445D021d3",
+      "symbol": "onchain",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xc79D46D716B33b463b3A6574d6eE26009aBF4E9a",
+      "symbol": "BYCOCKET",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x4Ca09A6D2Af0291dD5C6058Dbf3b6DA84773b5eE",
+      "symbol": "BOW",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x68E3b40dA4467Bcd06E8d91edB335B461f5d328d",
+      "symbol": "infiniti",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xBc20FF957e20Dcbf9d022E9367f858a8e063C8A5",
+      "symbol": "BOW",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x456A49690eF8a434d83Bf60DE76C2Dafa27B00A6",
+      "symbol": "ROBINDROP",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x659f49b9eaAcBCa200fdB85b94F85E21F5d57309",
+      "symbol": "DAT",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x22F2E924950A5306A9895a4755F078Da772caE0a",
+      "symbol": "LORD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xb5355F5E86A8e163D6a7E434Fd9cEd5a0D4184e5",
+      "symbol": "infiniti",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xf120c101cf2C3d50D48d2448fee777121372600F",
+      "symbol": "WEN",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x98555AaAF50D90628C4D56409FC8a0d02c1bb642",
+      "symbol": "VEX",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x8f90244691d9656B35083F0753Cf9202dA0DdB75",
+      "symbol": "SEED",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x727dc953A301590b6F0bB714266E17C162E37FE7",
+      "symbol": "AKITA",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0xa2B96c76335b2A37ADBf5F1cfA67178a41cB9CCd",
+      "symbol": "infiniti",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xbe21e9dFb5Ac2548f67E950aBc9a61f4b1f927E6",
+      "symbol": "HOODRAT",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x91AafF3e8c85734543672B6169E36c06A0304C53",
+      "symbol": "TAC",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0xb243333A379654f2dCBaC6061c7a4aa1308a81eA",
+      "symbol": "CRUMBS",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x076E630085674B4c3A79FCA6f54C7AcdE3E5E775",
+      "symbol": "CRUMBS",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xB98c894Ea65eE46aB585844f896a87d74A15baA5",
+      "symbol": "PepeWifHat",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x0957f5d2B9acF39e07C725139F2795C9E7A2Ee15",
+      "symbol": "MEME",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xaA0eD6e22D5aecC2D7Ddcd6C91d8c8A2f7d7ec6F",
+      "symbol": "ARCHER",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xCc51b3a4F47Aa603803C55abAA257F33b8e29dEd",
+      "symbol": "hehe",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x7FC173b2f191Ac01D7a9641f70d25E15851AB2b9",
+      "symbol": "$ARCHER",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x2221b42399951EB59Ad407d779e501B798957777",
+      "symbol": "BULLARCHER",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xfD88eFb12c15Da47B3495693b56f7bE1451dcb0F",
+      "symbol": "LOCKIN",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x92d29Fd3a4042574973E00b1a1d72C91D6778781",
+      "symbol": "Sherwood",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xaB46E5Be7fD6A051779971968da98A4657f4BccD",
+      "symbol": "BABYCASHCAT",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x0c389a38567656F27947384491E49ea231277777",
+      "symbol": "ISLES",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x8091Adf9e5dda37b8e4E044b7b89293528a631be",
+      "symbol": "LOCKIN",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x3ed57b3d33f975e19857DCA9d108288DEFa1C7A0",
+      "symbol": "MOGCAT",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x1Cb2CF9512feF448A2Eac08eBdE96038E4050b87",
+      "symbol": "HWALLET",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x0C82515756916C2D7cbd0073980E98aE19C27777",
+      "symbol": "Sherwood",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0xf3BD9633a67acE1570e04991810B0f53EDf3B44A",
+      "symbol": "FLAPPY",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xC2CF3c1ab4D585dbd6f21c8C949dDBe74614BC7C",
+      "symbol": "Thornveil",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xAFe380D3e9547F8F9cF4783491b2fB453beFf881",
+      "symbol": "MemeHood",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xc624C6763568D60a5B2138875D4c37f30A643765",
+      "symbol": "HOOD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x122a22E6fE6483707CE0D9876F8bbE0D8ba8C793",
+      "symbol": "NORMIE",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x8714b3D6bEbA3DB5Db689bF8750965b905511110",
+      "symbol": "ZERO",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0xD36e799Aa4FE8df7A035DD799012Ec16c9fDD387",
+      "symbol": "NORMIE",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xc104367Cd4C9fEe1B7b18a9518Cd759d8D6D684B",
+      "symbol": "RLand",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x3B07E42B1f64c36C06884F684cD8cd11E0564A53",
+      "symbol": "TRASH",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xD88C30D2c98AFa74B80Df26Bd31B6cA3471ECc71",
+      "symbol": "WOF",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xe537Ec1C7d8D80aa503b8ca5a43c6b85021fee76",
+      "symbol": "CASHBULL",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xEB2bA9a47266e5da4e12E0A736f393e7E2Efa27f",
+      "symbol": "CASHDOG",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x64F8a50ea40db6405577e9E3e693cbA4102e6494",
+      "symbol": "TRASH",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x4B9BF8De40BDF9c76623B2b77d0d82D81fcd6B8A",
+      "symbol": "DejaVu",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xE7870C0D237d940427a770eADc59D1E985AB8DC8",
+      "symbol": "🪶",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xe78E0e5B682BAE772Ea364B7145A7943570f4Ff3",
+      "symbol": "XCHANGE",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xa3DA44aC8f97AE13581b0F15e6bbeBa51003774d",
+      "symbol": "LMAO!",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xa320E730755071e43DE3B1E427711F5D279b77F3",
+      "symbol": "ROBIN",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0xbcc2dC0264634bf8C9AA94A2D51F2E7012862F37",
+      "symbol": "Cap",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xfD435C18116777e2ca078aEde6E6Ce5C85f3dA20",
+      "symbol": "infiniti",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xB99ae84e200BcE8E10Cf602647223Eb63595BCb6",
+      "symbol": "BOB",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xDAFB9f370636a2D6421f734A8c20BaB20Be26F9B",
+      "symbol": "TESTGR2",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0xfDD05321CE093E69BCce097670b235d196650087",
+      "symbol": "GINGER",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x65431a9890c74E3f215F8f0C417DbBe2bb81f05F",
+      "symbol": "ARCHER",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xef508ADe5C5C0771A747e1148869fa4194358AE1",
+      "symbol": "1%",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x03DaE1f67F2fdfd31b2c5759AF08F0d7Ef915DBF",
+      "symbol": "TEST",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x47D3Bba80b62D0416D715a01cAC0AAa396DbD078",
+      "symbol": "1%",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x5A9C209359DbC9E70e81724A23c8FfF777ADFefd",
+      "symbol": "HOPPY",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x40ec64Cac5F5139605CcFffA9977a28046E2c3e0",
+      "symbol": "WIF",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x9e41306667a93d6BCC9e84e5237Ec68332d57cd2",
+      "symbol": "1%",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x0674af75F1fC84f38c1a70CE2726aC58a4d67777",
+      "symbol": "GUAC",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x9bf9Ba6ad13c27bF7f440213d46F227A1d9D2263",
+      "symbol": "WIF",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xeb6444f7A99Fba9FDD41beAB98a82dF38E029e5d",
+      "symbol": "HOODICK",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xcE558fDb9FF0B8D23282FBFd4a8Ab9f540B2Ca74",
+      "symbol": "PURRPURR",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x0ADdFf7feb9f59A8D2262c6857Ed831743d71111",
+      "symbol": "HOODCAT",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x69feC26bC0c7Bba8a31e4C4EE5156D587C05cbD0",
+      "symbol": "TESTGRAD",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0xBc9618Ca5935508f698EEE2be38Cb57A20732cdE",
+      "symbol": "SEED",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xe7f08F8ddF0CFd179fFa041628f5C6FdeA6033EE",
+      "symbol": "UNIPCS",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x8AE43Cb9114A6576Bb11957fE9Cf0B637341da63",
+      "symbol": "HOPPY",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x542b1AA51A59b9C3212038e4c6a74DBEE8e61111",
+      "symbol": "RCAT",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xa368e3A5B949056584d11157624bAD4E9b660ceF",
+      "symbol": "OSVALDO",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x050F83037E0e06192dA593543103E31cF39FBd68",
+      "symbol": "CASHPEPE",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xC1445c50859283f8BC2326c355882ffafF77A7D9",
+      "symbol": "BABYDOG",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x6255D61Bd070cBB5a697518ff5516F65909BED67",
+      "symbol": "HAALAND",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x9765a7C05885F4e18BcEC175d906571686A5989D",
+      "symbol": "HOODLES",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xc397CbbB29c6980d65e3590FBaEa4ec29Cb69E5e",
+      "symbol": "WSB",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x991415ea1ef2Ae7644b4CA92F4C23FEb3f427777",
+      "symbol": "ETF",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0xe65628B8bb7AE772c205027c948d547f8A945bf6",
+      "symbol": "HPR",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x426830FF9bcCa9A93f2Cab6eFdD9f7e492a4c2AA",
+      "symbol": "REPE",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xD5B8e99B1b4b8c926DD53A2ddAB4D33CD58dbDA7",
+      "symbol": "WSB",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x62906cA1A6EC929c6dd487A696ACA5f1aBB6633F",
+      "symbol": "WSB",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x98DDaFaC75dF15544F0D82EdF372d75eDE4A4B1D",
+      "symbol": "TEST",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xa3478125cd493B1F928b5cAB28072A8123268173",
+      "symbol": "ROBH",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x465AC9Ca56f340bC5B96b02C065ae80F3d893eEC",
+      "symbol": "CASHDOG",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x53f7eF2773Bb79241858564Ba647bdE0EcaF583a",
+      "symbol": "CASHCAT",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xC5f3aFCe11261B16BE8FB620c5bA0Ca405c1f571",
+      "symbol": "CASHPEPE",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x264bcd8856Da41DA69a2A03BD9D887EA490f0d38",
+      "symbol": "TJ Fund",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x090051C777046eAa7508Af74C864e5E129C7cdE6",
+      "symbol": "PEPE",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xeB0b560e75150885b05AB561Ec587338d7740F12",
+      "symbol": "CashDog",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x2624B8419f5484aFD144d34EaA7960C4dB4f7777",
+      "symbol": "TJ Fund",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x1e8f02f5b92D76B7FaF2b795e602bF00C16aAE1A",
+      "symbol": "WALLET",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x8F76932bcBE329b4A110Bf42F01244ff95910e2f",
+      "symbol": "BULL",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xab252e332e8913793c60138f9Ed0a79BC457920d",
+      "symbol": "pooɥro",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x9233cFeeA87eD5199169abA42BDa31915E7eEC47",
+      "symbol": "CTIGER",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x6747B03cf2BCd7Db645951070Cb0D95b12c3D70F",
+      "symbol": "LIZARDHOOD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x9e95B2533e0c10416Be70A89Fcb674C2C38bfA1a",
+      "symbol": "RobinPEPE",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x645Cae0E8f1f20b061Bcc5B208E3178B324c56f5",
+      "symbol": "uhood",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x73CAc03649365cCdbDfe36588760FE7fc2337777",
+      "symbol": "DUTEST",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0xeBF88Bd97d3bc9Fec7fE83AC664eD74131641111",
+      "symbol": "RST",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x488539449410EE1bF3b5c0d92084EE7ac7b81466",
+      "symbol": "CashDog",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xEA6e62B70722916414361162bA55e91020e31962",
+      "symbol": "Horst",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xfA920e798378bC1e05e516a63d92f1D8ACF53886",
+      "symbol": "nosleepszn",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xe8FF8D12ec65d1B893d5c42826A9E9F7269C4E50",
+      "symbol": "Horst",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x930717B42cF03E81279f577EbF42a5B5Fe771D33",
+      "symbol": "CULT",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x834b31164b5e5F4a08B441D796aBB85f714bb7C1",
+      "symbol": "HOPPY",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x025Ca06c150E76cD20Ca44981208c27d4ec40dB2",
+      "symbol": "SCTR",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x9E4EA102585d21f6e1dD268cde0dD059464Ce62a",
+      "symbol": "CULT",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x54D2Da53f1F4d595644905Dd77Cce6b897B3032e",
+      "symbol": "ROBINSON",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x26757CF38501e068A92d992502293b6a07743979",
+      "symbol": "PixelVlad",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xD8BABEFC098335E75D300Cf84D7D49c3d910F25B",
+      "symbol": "WALLET",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x4aF8e6bc1A72C3e94b3A707Cba374834D306803F",
+      "symbol": "CASHOOD",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xA0fAf5c42127C1Bd0A6DF042486dD4556Ddd0D98",
+      "symbol": "HOPPY",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x411ae5B2823A4ba183D40F921fAf7fa42E8cf1a7",
+      "symbol": "VLAD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x757945dE7B69468107da39C53C275d491745bdf3",
+      "symbol": "test",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x5498127f170F9c5DFd1d8A8fC8a797b54735E840",
+      "symbol": "HOODRAT",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x6E2dCF8b64b2d88564F8edc2206Ef07d2954b6A1",
+      "symbol": "PRED",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xF6ace5c7c7798f07fED58c27DA12dCdBd447E88f",
+      "symbol": "wobin",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x91dBFdc5C93936ca207cD0BB1d0dbbE21af2aF8C",
+      "symbol": "POP",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xf7B25aBEB0fFCba7D39065e89EfBdC9D6427aE29",
+      "symbol": "宋江",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x21Ef8B42BE9b0C5f707fcAc7705eBe3bF1A77777",
+      "symbol": "RST",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x6a3F77C125e1AB5582B3cCCE778b105B4AF6A081",
+      "symbol": "宋江",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x97722F5b6BD7972C1E23FAD92DC7b3A0A8e719bE",
+      "symbol": "WRH",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x2303F3dAfE2d14d94B3111e7eF77BC1dB621Dd82",
+      "symbol": "WALLET",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x01135429BfD69aB57fF90273F03CBD282c4A2ef5",
+      "symbol": "WALLET",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x67e50B941C00Ded1356C60AA3C97354fb73D8378",
+      "symbol": "MZERO",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x5c93d7cEB725816301684669C26E42694B6c12D6",
+      "symbol": "GIGAVLAD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x3C7d418e3c37B725627D03bb8F3981c70abb3376",
+      "symbol": "RollingCat",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x4003465f8441B2e6FA13F89D406aE97E95Db16Fb",
+      "symbol": "RainCat",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x524FB3f5B96f29837CB182088a41834daD5A95a6",
+      "symbol": "ʇɐɔɥsɐɔ",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x005681B0FE2dA7cAF4E4936a7a6EF1c073193BdC",
+      "symbol": "pooɥ",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x19AA4eE6A7511D12c9Bd851A3a36ab31a0d26753",
+      "symbol": "pooɥ",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x514785199694A91b96eafCF3d9A4f350C03e3C72",
+      "symbol": "poou",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xb1f50294912b247dF7e783B24ad1Aa9A924B50C0",
+      "symbol": "PIGGY",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x79C3807dD7d2b68AB259C2FF8d8EF8210d6aF882",
+      "symbol": "FISH",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x58e14a22Ff98E1AF80dEc9f25fF36FFbaC992831",
+      "symbol": "Stockman",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x60bBA75E7be9Fa4F55F3202b31e7A8A30610b573",
+      "symbol": "TCAT",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xfD0776028294046A92E0fbD84DB30960c60b9560",
+      "symbol": "TCAT",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x43B75F99Dd267eF6b8CFe90fF2A3D1f15aa9285e",
+      "symbol": "MY",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x0A13E7CFAad966c213B6Ce062aaE4A737cDb7777",
+      "symbol": "DCA",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0xFc44D96b5B0B0cEf83fF22D112990919d76Fa78f",
+      "symbol": "TCAT",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xE6ffE1f8240Ae900522fcA6c640d8EAA626c13Fa",
+      "symbol": "POD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0x7c78075b2d46760b65EF89304fF5FB8572D6b775",
+      "symbol": "RBH",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x15D635e6ec68a4d2bed7508012430C5852F1b0d8",
+      "symbol": "RBH",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xB0CF02Ba62Dc0C29Ab990cD705dEd56506bC291b",
+      "symbol": "LAPCAT",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xc72fFAC54033A03237Cf66766C985fE63878333E",
+      "symbol": "💚",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x11D2a057fBC49084f1243323dE208E39dE4bE5FB",
+      "symbol": "Cupsey",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x531b5c600739feb7De531562749D58CAeE4EA876",
+      "symbol": "GMSK",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0xa671ECb69f794676e1bB20DbA7f64800fF287561",
+      "symbol": "Nascat",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x29063f81B00c8970e6664d1FDF14c0e4a7286A31",
+      "symbol": "GORO",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xd4052415613B34Af236024B895574c467f65b6dD",
+      "symbol": "4663",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x3eB2bc6996a4Ca6E87A6d215bBC3fDc103361b47",
+      "symbol": "HOODIE",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0xB4946C47b8306D08757F3B8a6fE5d187461Ff702",
+      "symbol": "SHERIFF",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xa6b487C6e80a33cE265533F9498169635991bFa4",
+      "symbol": "MEME",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x0aB3EB67fE35A6389604c171af64b2C72eB30dcF",
+      "symbol": "MEME",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x153c84C1DBE8A5FC508fD2e181359F110E742f44",
+      "symbol": "uhood",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x535Dc51E448C6886011c435296AB0F7Bc27759A1",
+      "symbol": ".hood",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x009F63480dd2Aa0aEA8A8D18393d599dda833933",
+      "symbol": "ROX",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x4F7ECecB3A5b0b7D74D5cf3730E9C0E95F167777",
+      "symbol": "RSR",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": false
+    },
+    {
+      "tokenAddress": "0xED278073E5858C9e1F11fE0de3dd4bFc33C96342",
+      "symbol": "401OS",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x0118b396F50295689ab215F165c9194eEA2bA9a9",
+      "symbol": "TENNISBIRD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x1fBB87F31B32dD7a672542B7C1AEe8Fd2D779Ea4",
+      "symbol": "Valhalla",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x50b1a46DDEE3288bb509099f696a6fDF6260e180",
+      "symbol": "TOMYUM",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x1b804B550F4c188eb8eAf0589E127b9f6a0B79c1",
+      "symbol": "GCHAT",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xB7639fa01e9F8357D1F97720EC64d765689F35e6",
+      "symbol": "uhood",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x4f8ADa81251Eb99F2BB21788E0d65393b34f682C",
+      "symbol": "TENNISBIRD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x49Ee799950303159bb37AA2d5F78d7f44d9c6E14",
+      "symbol": "d",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x9d998beacC247BB9465A9eB029de3aEb62CA5d0a",
+      "symbol": "CATFATHER",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x7C2765c5E9354507Cdf411962162DA9eC0B70d59",
+      "symbol": "BROOKWOOD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xed41Ee249f8140257D682103Ee233064D53eD785",
+      "symbol": "BUCK",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xB05601cB608D3F506AEBA22cAa9F252A7E420C6d",
+      "symbol": "DREAM",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x7995464e5ffac88d113a7d0673a5F7EDDc2acFe9",
+      "symbol": "SKI",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xAe89e5573F80E7d4C4A82f3322446E2272fE1bbf",
+      "symbol": "HOOD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x255639dA7961aD53EFF15BC565250F06Bc9b0Ba5",
+      "symbol": "CATWIF",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xbC4Dc71C26Ed81ecD164047aE48deD7aDd837393",
+      "symbol": "DREAM",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x4c884C4a414AfD457B1D6448fcA6d5D9a699A2a7",
+      "symbol": "XVT",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x67E5FAf08Cec6fDaCbF4b7440A2C2C2041Ba7735",
+      "symbol": "50",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x493A278479a913B6eC0B66A323129D05bc9eEa10",
+      "symbol": "HOOD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xf4dbF0cf034af87f668093F03C20B533c1d62a01",
+      "symbol": "GENUG",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x61b844599e4cFB13CEC52Bfb874abBB400416aCe",
+      "symbol": "cutedog123",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x7dF9BC367dbA716cdEe3Da358235F2841106E1B6",
+      "symbol": "ARROW",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x70299D19a49bA28A5800ca0b9336Ae580Bc2F433",
+      "symbol": "ARROW",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xa3176A81de7D9309d7DD0d4Cda152615a043a39a",
+      "symbol": "ARROW",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xDCa6da2ADcebE397C15f348F6EE38EE0eBe6b867",
+      "symbol": "FIDEL",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xF44F135cdDE2887E36aA2A7f1Da874695CCa602a",
+      "symbol": "BABYCASHCAT",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x16c460F3556b572f307D7c712a1f78392f202a1f",
+      "symbol": "FLATCOIN",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xf056C4C25a144a13c5Ba937DFb015B73eff1715e",
+      "symbol": "SNOO",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xCc6c59356F03ABc953AFefdaE8C77fC559160C9c",
+      "symbol": "SCALE",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x0A0ECD4bd7dfBc1BBa1B1a9540E998B294E22795",
+      "symbol": "RELOAD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xA93aC733ac641d80B025eBd21Db603Cb6Cc64706",
+      "symbol": "SCALE",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xe587dBC7B4e9B2647428ABbaaFfdB6E25BFc403a",
+      "symbol": "LANDWOLF",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x54a989FbA24a4acAF7Bd15195658f44c9D2F141f",
+      "symbol": "HOOD",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xc0D89B7760AD897ffaC892dc2cFDFe83BA971bba",
+      "symbol": "TOPH",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x27938dac005D6f1907ebB79eF780173b95dF9077",
+      "symbol": "CASHBIRD",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x56A9DE89B50D2725C84e93D21fFBD38c5904DcAE",
+      "symbol": "DOGE",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x2F2F52Cd4CAB6A84E2936dC71cFB10b3CD612D09",
+      "symbol": "GREENARROW",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x8dB96bAC154E1D51c9D0778A0465D1f8173EdaD5",
+      "symbol": "$ROBINFUN",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x5CB473DF77fdb73Ef69dEf079414fb5391d9Ce88",
+      "symbol": "mim",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x95545ab639A75B2c16797AD8B0E572E2EEB34647",
+      "symbol": "$ROBINFUN",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0xe52EFbD6460e6a8c25f5888516825e8E11512A3e",
+      "symbol": "$ROBINFUN",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x4e29a4F16A39eD4CfD29cc318256E4256b6f5c69",
+      "symbol": "$ROBINFUN",
+      "lockedFraction": 1,
+      "isLocked": true,
+      "rugged": true
+    },
+    {
+      "tokenAddress": "0x9de80D8452c6594180cFEBAb99024d3186644B31",
+      "symbol": "$ROBINFUN",
+      "lockedFraction": 0,
+      "isLocked": false,
+      "rugged": true
+    }
+  ]
+}

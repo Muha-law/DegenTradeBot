@@ -26,6 +26,7 @@ export const config = {
   // Active chains are managed dynamically — see chainSettings.js.
   etherscanApiKey: process.env.ETHERSCAN_API_KEY || null,
   groqApiKey: process.env.GROQ_API_KEY || null,
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY || null,
   goplusAppKey: process.env.GOPLUS_APP_KEY || null,
   goplusAppSecret: process.env.GOPLUS_APP_SECRET || null,
   walletPrivateKey: process.env.WALLET_PRIVATE_KEY || null,

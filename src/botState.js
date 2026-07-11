@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { getDataDir } from "./dataDir.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const statePath = path.join(__dirname, "..", "data", "botState.json");
+const statePath = path.join(getDataDir(), "botState.json");
 
 // Master on/off switch. When paused, detection/rechecks/price updates/track
 // alerts all skip their work — the Telegram interface itself stays up so

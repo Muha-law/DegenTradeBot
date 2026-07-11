@@ -136,6 +136,14 @@ export const CHAINS = {
     // decodes byte-for-byte as the standard SwapRouter02 exactInputSingle
     // ABI (selector 0x04e45aaf).
     v3RouterAddress: "0xCaf681a66D020601342297493863E78C959E5cb2",
+    // QuoterV2 for the same V3 deployment as the router above. Verified three
+    // independent ways: (1) Blockscout tags it "QuoterV2", (2) its factory()
+    // and WETH9() reads match the router's exact factory/WETH addresses —
+    // the only match out of 9 candidate Quoter/QuoterV2 contracts on this
+    // chain, the rest belong to other DEX deployments sharing it, (3) a live
+    // quoteExactInputSingle call against a real, high-liquidity pool (VLAD,
+    // $3.2M) returned a correctly-shaped, plausible quote.
+    v3QuoterAddress: "0x33e885eD0Ec9bF04EcfB19341582aADCb4c8A9E7",
     goplusChainId: "4663",
     etherscanChainId: 4663, // not on Etherscan V2 yet (Blockscout-based) — deployer history just degrades to neutral
     dexscreenerChainId: "robinhood",

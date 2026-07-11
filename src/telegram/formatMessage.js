@@ -7,6 +7,16 @@ const explorerUrls = {
 
 const gradeEmoji = { A: "🟢", B: "🟩", C: "🟡", D: "🟠", F: "🔴" };
 
+// Legacy Telegram Markdown treats _, *, `, [ as entity delimiters — an odd
+// count of any of them (common in on-chain token symbols and raw error
+// text, both outside our control) leaves an entity unclosed and Telegram
+// rejects the whole message with "can't parse entities", silently dropping
+// it. Escape before interpolating any attacker/environment-controlled text.
+export function escapeMd(str) {
+  if (!str) return str;
+  return String(str).replace(/([_*`[])/g, "\\$1");
+}
+
 export function fmtUsd(n) {
   if (!n) return "$0";
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
@@ -200,6 +210,10 @@ const CLOSE_HEADLINES = {
   comando_ai_exit: "🪖 *Paper trade closed — SUPER COMANDO (AI call)*",
   manual_close_all: "🛑 *Paper trade closed — manual close all*",
   manual_close: "🛑 *Paper trade closed — manual*",
+  // Price was unreadable/insane for a sustained period (dead pool/drained
+  // liquidity) — closed as an assumed total loss rather than left stuck
+  // with no way to ever trigger a stop-loss. See paperTrading.js.
+  stale_price: "⚠️ *Paper trade closed — STALE PRICE (assumed worthless)*",
 };
 
 export function buildPaperTradeCloseMessage({ chain, tokenAddress, name, symbol, entryPriceUsd, exitPriceUsd, pnlUsd, pnlPct, exitReason }) {
@@ -260,6 +274,15 @@ const REAL_CLOSE_HEADLINES = {
   manual_close_all: "🛑 *REAL trade closed — manual close all*",
   manual_sell: "🛑 *REAL trade closed — manual sell*",
   manual_close: "🛑 *REAL trade closed — manual*",
+  // Price was unreadable/insane for a sustained period (dead pool/drained
+  // liquidity) — the checker forced a real sell attempt anyway rather than
+  // leaving the position stuck with no way to ever trigger a stop-loss.
+  // Whatever came back is real proceeds, even if near zero. See realTrading.js.
+  stale_price_exit: "⚠️ *REAL trade closed — STALE PRICE (forced exit)*",
+  // Post-buy sellability check (verifySellable in swapExecutor.js) failed
+  // immediately after purchase — likely a honeypot, exited on the spot
+  // rather than waiting for the normal checker cycle to discover it.
+  honeypot_immediate_exit: "🚨 *REAL trade closed — HONEYPOT (immediate exit)*",
 };
 
 export function buildRealTradeCloseMessage({ chain, tokenAddress, name, symbol, entryPriceUsd, exitPriceUsd, pnlUsd, pnlPct, exitReason, txHash, gasUsd }) {
@@ -280,8 +303,8 @@ export function buildRealTradeCloseMessage({ chain, tokenAddress, name, symbol, 
 
 export function buildRealTradeFailedMessage({ chain, tokenAddress, name, symbol, reason }) {
   return [
-    `⚠️ *REAL trade FAILED* — ${name || "Unknown"} (${symbol || "?"}) on ${chain.label}`,
-    `${reason}`,
+    `⚠️ *REAL trade FAILED* — ${escapeMd(name) || "Unknown"} (${escapeMd(symbol) || "?"}) on ${chain.label}`,
+    escapeMd(reason),
     "",
     `\`${tokenAddress}\``,
   ].join("\n");
@@ -339,23 +362,60 @@ export function buildRealTradingSummary({ settings, stats, unrealizedPnlUsd, wal
   return lines.join("\n");
 }
 
-// Per-trade breakdown for the Active Trades view — the summary above only
-// shows aggregates, this lists each open position with its live price/PnL.
-export function buildActiveTradesMessage({ trades, totalUnrealizedUsd }) {
-  if (trades.length === 0) return "📋 *Active Trades*\n\nNothing open right now.";
+// Per-trade breakdown for the Active Trades view — Bonk-Bot-style: wallet
+// balance up top, each position shows its X-multiple, live value, market
+// cap, and liquidity, with a totals footer. `walletBalances` follows the
+// same {label, balance, symbol, usdValue} shape as buildRealTradingSummary's
+// — omit/empty for paper trading, which has no real wallet behind it.
+export function buildActiveTradesMessage({ trades, totalUnrealizedUsd, walletBalances = [], mode = "paper" }) {
+  const modeLabel = mode === "real" ? "Real Funds" : "Paper";
+  const showLabel = walletBalances.length > 1;
+  const walletLines = walletBalances.length
+    ? walletBalances
+        .map(
+          (b) =>
+            `💼 ${showLabel ? `${b.label}: ` : "Wallet: "}${b.balance.toFixed(5)} ${b.symbol}${
+              b.usdValue != null ? ` (~${fmtUsd(b.usdValue)})` : ""
+            }`
+        )
+        .join("\n") + "\n\n"
+    : "";
+
+  if (trades.length === 0) {
+    return `${walletLines}📊 *Open Positions (0) — ${modeLabel}*\n\nNothing open right now.`;
+  }
 
   const lines = trades.map((t) => {
-    const pctLabel = t.pnlPct == null ? "price unavailable" : `${t.pnlPct >= 0 ? "🟢+" : "🔴"}${t.pnlPct.toFixed(1)}%`;
-    const usdLabel = t.pnlUsd == null ? "" : ` (${t.pnlUsd >= 0 ? "+" : ""}${fmtUsd(Math.abs(t.pnlUsd))})`;
+    const hasPrice = t.pnlPct != null;
+    const multLabel = hasPrice ? `${(1 + t.pnlPct / 100).toFixed(1)}x  ` : "";
+    const pctLabel = hasPrice ? `${t.pnlPct >= 0 ? "+" : ""}${t.pnlPct.toFixed(1)}%` : "price unavailable";
+    const dot = !hasPrice ? "⚪️" : t.pnlPct >= 0 ? "🟢" : "🔴";
+    const currentValueUsd = hasPrice ? t.position_size_usd + t.pnlUsd : t.position_size_usd;
     const nowLabel = t.currentPriceUsd != null ? `$${fmtPrice(t.currentPriceUsd)}` : "n/a";
-    const comandoTag = t.comando_active ? ` 🪖 riding (floor +${t.take_profit_pct}%, peak +${(t.comando_peak_pct ?? t.pnlPct ?? 0).toFixed(1)}%)` : "";
+    const comandoTag = t.comando_active
+      ? ` 🪖 riding (floor +${t.take_profit_pct}%, peak +${(t.comando_peak_pct ?? t.pnlPct ?? 0).toFixed(1)}%)`
+      : "";
+
     return [
-      `*${t.symbol || "?"}* (${t.chain}) — #${t.id} — ${pctLabel}${usdLabel}${comandoTag}`,
-      `Entry: $${fmtPrice(t.entry_price_usd)} | Now: ${nowLabel} | Size: ${fmtUsd(t.position_size_usd)}`,
-      `\`${t.token_address}\``,
+      `${dot} *${escapeMd(t.symbol) || "?"}*  ${multLabel}(${pctLabel})${comandoTag}`,
+      `   Value: ${fmtUsd(currentValueUsd)} | MC: ${fmtUsd(t.marketCapUsd)} | Liq: ${fmtUsd(t.liquidityUsd)}`,
+      `   Entry: $${fmtPrice(t.entry_price_usd)} → Now: ${nowLabel}`,
     ].join("\n");
   });
 
-  const totalLabel = `${totalUnrealizedUsd >= 0 ? "+" : ""}${fmtUsd(Math.abs(totalUnrealizedUsd))}`;
-  return `📋 *Active Trades* (${trades.length})\nUnrealized PnL: ${totalLabel}\n\n${lines.join("\n\n")}`;
+  const totalValueUsd = trades.reduce((sum, t) => sum + (t.pnlUsd == null ? t.position_size_usd : t.position_size_usd + t.pnlUsd), 0);
+  const totalDeployedUsd = trades.reduce((sum, t) => sum + t.position_size_usd, 0);
+  const totalPct = totalDeployedUsd > 0 ? (totalUnrealizedUsd / totalDeployedUsd) * 100 : null;
+  const totalPctLabel = totalPct == null ? "" : ` (${totalPct >= 0 ? "+" : ""}${totalPct.toFixed(0)}%)`;
+  const totalPnlLabel = `${totalUnrealizedUsd >= 0 ? "+" : ""}${fmtUsd(Math.abs(totalUnrealizedUsd))}${totalPctLabel}`;
+
+  return [
+    walletLines + `📊 *Open Positions (${trades.length}) — ${modeLabel}*`,
+    "",
+    lines.join("\n\n"),
+    "",
+    "━━━━━━━━━━━━━━",
+    `Total Value: ${fmtUsd(totalValueUsd)}`,
+    `Unrealized PnL: ${totalPnlLabel}`,
+  ].join("\n");
 }

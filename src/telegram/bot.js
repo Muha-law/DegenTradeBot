@@ -42,6 +42,7 @@ import {
   buildRealTradingSummary,
   fmtUsd,
   fmtPrice,
+  escapeMd,
   WATCHLIST_PAGE_SIZE,
 } from "./formatMessage.js";
 
@@ -62,6 +63,9 @@ async function getOpenTradesWithLivePnl() {
       let currentPriceUsd = null;
       let pnlPct = null;
       let pnlUsd = null;
+      let marketCapUsd = null;
+      let liquidityUsd = null;
+      let nativeUsdPrice = null;
       try {
         const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
         const pair = pairSummary(dexPair, t.token_address);
@@ -69,12 +73,15 @@ async function getOpenTradesWithLivePnl() {
           currentPriceUsd = pair.priceUsd;
           pnlPct = ((currentPriceUsd - t.entry_price_usd) / t.entry_price_usd) * 100;
           pnlUsd = t.position_size_usd * (pnlPct / 100);
+          marketCapUsd = pair.marketCapUsd;
+          liquidityUsd = pair.liquidityUsd;
+          nativeUsdPrice = pair.nativeUsdPrice;
         }
       } catch {
         // best-effort — leave nulls if the price lookup fails for this trade
       }
       if (pnlUsd != null) totalUnrealizedUsd += pnlUsd;
-      return { ...t, currentPriceUsd, pnlPct, pnlUsd };
+      return { ...t, currentPriceUsd, pnlPct, pnlUsd, marketCapUsd, liquidityUsd, nativeUsdPrice };
     })
   );
 
@@ -119,6 +126,9 @@ async function getOpenRealTradesWithLivePnl() {
       let currentPriceUsd = null;
       let pnlPct = null;
       let pnlUsd = null;
+      let marketCapUsd = null;
+      let liquidityUsd = null;
+      let nativeUsdPrice = null;
       try {
         const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
         const pair = pairSummary(dexPair, t.token_address);
@@ -126,16 +136,45 @@ async function getOpenRealTradesWithLivePnl() {
           currentPriceUsd = pair.priceUsd;
           pnlPct = ((currentPriceUsd - t.entry_price_usd) / t.entry_price_usd) * 100;
           pnlUsd = t.position_size_usd * (pnlPct / 100);
+          marketCapUsd = pair.marketCapUsd;
+          liquidityUsd = pair.liquidityUsd;
+          nativeUsdPrice = pair.nativeUsdPrice;
         }
       } catch {
         // best-effort — leave nulls if the price lookup fails for this trade
       }
       if (pnlUsd != null) totalUnrealizedUsd += pnlUsd;
-      return { ...t, currentPriceUsd, pnlPct, pnlUsd };
+      return { ...t, currentPriceUsd, pnlPct, pnlUsd, marketCapUsd, liquidityUsd, nativeUsdPrice };
     })
   );
 
   return { trades, totalUnrealizedUsd };
+}
+
+// Wallet balance line(s) for the real-money Active Trades view — one entry
+// per chain that has an open position (falls back to every enabled chain
+// when nothing's open, so the balance still shows). usdValue is derived
+// from nativeUsdPrice already fetched alongside that chain's open trades —
+// best-effort, so it's just omitted if no trade on that chain had one.
+async function getWalletBalancesForTrades(trades) {
+  if (!hasWallet()) return [];
+  const chainKeys = [...new Set(trades.map((t) => t.chain))];
+  const keysToQuery = chainKeys.length > 0 ? chainKeys : getActiveChainDefs().map((c) => c.key);
+
+  return Promise.all(
+    keysToQuery.map(async (key) => {
+      const def = CHAINS[key];
+      const chain = { key, ...def };
+      const bal = await getNativeBalance(chain).catch(() => null);
+      const nativeUsdPrice = trades.find((t) => t.chain === key && t.nativeUsdPrice)?.nativeUsdPrice ?? null;
+      return {
+        label: def.label,
+        balance: bal ?? 0,
+        symbol: def.nativeSymbol,
+        usdValue: bal != null && nativeUsdPrice ? bal * nativeUsdPrice : null,
+      };
+    })
+  );
 }
 
 // Unlike paper trading's close-all, this executes REAL sell transactions on
@@ -152,18 +191,30 @@ async function closeAllOpenRealTrades(settings) {
     const chainDef = CHAINS[t.chain];
     if (!chainDef) continue;
     const chain = { key: t.chain, ...chainDef };
+    const lockKey = `${t.chain}:${t.token_address}`;
+    if (!acquireTradeLock(lockKey)) {
+      // Another buy/sell (manual, or a double-tap of Close ALL itself) is
+      // already in flight for this token — skip it this pass rather than
+      // racing a second sellToken() against the same position.
+      failedCount++;
+      continue;
+    }
     try {
-      const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
+      // Still attempt the sell even with no readable DexScreener price — a
+      // drained/dead pool is exactly the case where a price lookup fails but
+      // sellToken() (on-chain quote first, minOut=0n last resort) may still
+      // be able to recover something. Skipping the attempt entirely here was
+      // the gap that left dead-pool positions permanently un-sellable via
+      // this button; sellToken() itself already degrades gracefully.
+      const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address).catch(() => null);
       const pair = pairSummary(dexPair, t.token_address);
-      if (!pair || !isSanePrice(pair.priceUsd)) {
-        failedCount++;
-        continue;
-      }
+      const exitPriceUsd = pair && isSanePrice(pair.priceUsd) ? pair.priceUsd : t.entry_price_usd;
+
       const sellResult = await sellToken(chain, t.token_address, t.token_amount_raw, settings.slippageBps);
       const pnlUsd = sellResult.proceedsUsd - t.position_size_usd - t.entry_gas_usd - sellResult.gasUsd;
       const pnlPct = (pnlUsd / t.position_size_usd) * 100;
       closeRealTrade(t.id, {
-        exitPriceUsd: pair.priceUsd,
+        exitPriceUsd,
         exitReason: "manual_close_all",
         pnlUsd,
         pnlPct,
@@ -176,6 +227,8 @@ async function closeAllOpenRealTrades(settings) {
     } catch (err) {
       console.error(`[realTrading] closeAll failed to sell ${t.symbol} (${t.chain}):`, err.message);
       failedCount++;
+    } finally {
+      releaseTradeLock(lockKey);
     }
   }
 
@@ -203,6 +256,20 @@ function takePending(chatId) {
 function isAdmin(ctx) {
   if (!config.telegram.adminUserId) return true; // no admin configured — allow anyone (private bot use)
   return String(ctx.from?.id) === config.telegram.adminUserId;
+}
+
+// Prevents a double-tap (or retry after Telegram lag) on a buy/sell button
+// from firing two overlapping on-chain transactions for the same position —
+// without this, both calls pass their "is there an open position?" check
+// before either write lands, and both execute real swaps.
+const tradeLocks = new Set();
+function acquireTradeLock(key) {
+  if (tradeLocks.has(key)) return false;
+  tradeLocks.add(key);
+  return true;
+}
+function releaseTradeLock(key) {
+  tradeLocks.delete(key);
 }
 
 // Real Funds Trading passcode lock — separate from isAdmin(), which only
@@ -462,7 +529,7 @@ async function renderTracklistText() {
     const tags = [t.best_milestone_hit > 0 ? `best +${t.best_milestone_hit}%` : null, t.down50_alert_sent ? "⚠️ -50% hit" : null]
       .filter(Boolean)
       .join(", ");
-    return `${i + 1}. *${t.symbol || "?"}* (${t.chain}) — ${pctLabel}${tags ? ` [${tags}]` : ""}\n   \`${t.token_address}\``;
+    return `${i + 1}. *${escapeMd(t.symbol) || "?"}* (${t.chain}) — ${pctLabel}${tags ? ` [${tags}]` : ""}\n   \`${t.token_address}\``;
   });
 
   return `📋 *Tracklist* (${tracks.length})\n\n${lines.join("\n\n")}`;
@@ -543,7 +610,7 @@ async function handleTrack(ctx, chainKey, tokenAddress) {
   });
 
   await ctx.reply(
-    `📌 Tracking ${pair.name || "Unknown"} (${pair.symbol || "?"}) on ${chainDef.label} from $${pair.priceUsd}.\n` +
+    `📌 Tracking ${escapeMd(pair.name) || "Unknown"} (${escapeMd(pair.symbol) || "?"}) on ${chainDef.label} from $${pair.priceUsd}.\n` +
       `I'll alert you at +50%, +100%, +200%... and if it drops 50% or 90% (dead).`,
     { ...backKeyboard() }
   );
@@ -570,7 +637,7 @@ async function renderManualTradeTerminal(ctx) {
 
   const openPosition = getOpenRealTradeByToken(chainKey, tokenAddress);
   const lines = [
-    `🎯 *Manual Trade* — ${pair.name || "Unknown"} (${pair.symbol || "?"}) on ${chain.label}`,
+    `🎯 *Manual Trade* — ${escapeMd(pair.name) || "Unknown"} (${escapeMd(pair.symbol) || "?"}) on ${chain.label}`,
     "",
     `Price: $${fmtPrice(pair.priceUsd)}`,
     `Market cap: ${fmtUsd(pair.marketCapUsd)}`,
@@ -596,15 +663,22 @@ async function executeManualBuy(ctx, context, nativeAmount) {
   const { chainKey, tokenAddress } = context;
   const chainDef = CHAINS[chainKey];
   const chain = { key: chainKey, ...chainDef };
+  const lockKey = `${chainKey}:${tokenAddress}`;
+  if (!acquireTradeLock(lockKey)) {
+    return ctx.reply("A trade for this token is already in progress — please wait.");
+  }
   const settings = loadRealTradingSettings();
   try {
     const result = await buyTokenWithNativeAmount(chain, tokenAddress, nativeAmount, settings.slippageBps);
     const existing = getOpenRealTradeByToken(chainKey, tokenAddress);
     if (existing) {
-      // Adding to an existing position — blend entry price by USD-weighted average.
+      // Adding to an existing position — blend entry price by USD-weighted
+      // average of cost, not raw token amounts (avoids needing decimals).
       const newTotalUsd = existing.position_size_usd + result.usdSpent;
       const newTotalRaw = (BigInt(existing.token_amount_raw) + BigInt(result.tokenAmountRaw)).toString();
-      reduceRealTrade(existing.id, { tokenAmountRaw: newTotalRaw, positionSizeUsd: newTotalUsd });
+      const blendedEntryPriceUsd =
+        (existing.entry_price_usd * existing.position_size_usd + result.entryPriceUsd * result.usdSpent) / newTotalUsd;
+      reduceRealTrade(existing.id, { tokenAmountRaw: newTotalRaw, positionSizeUsd: newTotalUsd, entryPriceUsd: blendedEntryPriceUsd });
     } else {
       openRealTrade({
         chain: chainKey,
@@ -625,6 +699,8 @@ async function executeManualBuy(ctx, context, nativeAmount) {
     await ctx.reply(`✅ Bought ${nativeAmount} ${chainDef.nativeSymbol} (~${fmtUsd(result.usdSpent)}) — gas ${fmtUsd(result.gasUsd)}\nTx: \`${result.txHash}\``, { parse_mode: "Markdown" });
   } catch (err) {
     await ctx.reply(`⚠️ Buy failed: ${err.message}`);
+  } finally {
+    releaseTradeLock(lockKey);
   }
   await renderManualTradeTerminal(ctx);
 }
@@ -633,12 +709,16 @@ async function executeManualSell(ctx, context, pct) {
   const { chainKey, tokenAddress } = context;
   const chainDef = CHAINS[chainKey];
   const chain = { key: chainKey, ...chainDef };
-  const position = getOpenRealTradeByToken(chainKey, tokenAddress);
-  if (!position) return ctx.reply("No open position to sell.");
-  const settings = loadRealTradingSettings();
-  const sellRaw = (BigInt(position.token_amount_raw) * BigInt(pct)) / 100n;
-  if (sellRaw <= 0n) return ctx.reply("Nothing to sell.");
+  const lockKey = `${chainKey}:${tokenAddress}`;
+  if (!acquireTradeLock(lockKey)) {
+    return ctx.reply("A trade for this token is already in progress — please wait.");
+  }
   try {
+    const position = getOpenRealTradeByToken(chainKey, tokenAddress);
+    if (!position) return ctx.reply("No open position to sell.");
+    const settings = loadRealTradingSettings();
+    const sellRaw = (BigInt(position.token_amount_raw) * BigInt(pct)) / 100n;
+    if (sellRaw <= 0n) return ctx.reply("Nothing to sell.");
     // Live price for the DB record — proceeds/rawAmount would need the
     // token's decimals to back out correctly, and we already have this
     // from a real quote instead of assuming 18 decimals.
@@ -673,11 +753,21 @@ async function executeManualSell(ctx, context, pct) {
     );
   } catch (err) {
     await ctx.reply(`⚠️ Sell failed: ${err.message}`);
+  } finally {
+    releaseTradeLock(lockKey);
   }
   await renderManualTradeTerminal(ctx);
 }
 
 async function handlePendingAction(ctx, pending, text, digestControls) {
+  // pendingAction is keyed by chat, not by user — in a group chat, anyone
+  // could otherwise win the race to answer a prompt the admin armed (e.g. a
+  // filter edit or a manual buy amount) before the admin replies themselves.
+  // Every button that sets a pending action already checks isAdmin(ctx), so
+  // re-checking here just makes the free-text continuation match that.
+  if (!isAdmin(ctx)) {
+    return ctx.reply("Not authorized.");
+  }
   if (pending.type === "filter") {
     const filters = loadFilters();
     const prev = filters[pending.key];
@@ -961,7 +1051,7 @@ export function createBot(stats, chainControls, digestControls) {
     await ctx.answerCbQuery();
     const { trades, totalUnrealizedUsd } = await getOpenTradesWithLivePnl();
     trades.sort((a, b) => (b.pnlPct ?? -Infinity) - (a.pnlPct ?? -Infinity));
-    await safeEdit(ctx, buildActiveTradesMessage({ trades, totalUnrealizedUsd }), activeTradesKeyboard(trades));
+    await safeEdit(ctx, buildActiveTradesMessage({ trades, totalUnrealizedUsd, mode: "paper" }), activeTradesKeyboard(trades));
   });
 
   bot.action("paperconfirm:closeall", async (ctx) => {
@@ -1005,23 +1095,30 @@ export function createBot(stats, chainControls, digestControls) {
       await ctx.answerCbQuery("Already closed or not found.");
       return;
     }
+    const lockKey = `${t.chain}:${t.token_address}`;
+    if (!acquireTradeLock(lockKey)) {
+      await ctx.answerCbQuery("A trade for this token is already in progress — please wait.");
+      return;
+    }
     await ctx.answerCbQuery(`Closing #${id}…`);
     const chainDef = CHAINS[t.chain];
     try {
       const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
       const pair = pairSummary(dexPair, t.token_address);
       if (!pair || !isSanePrice(pair.priceUsd)) {
-        return safeEdit(ctx, `⚠️ Couldn't fetch a current price for ${t.symbol || t.token_address} — left open.`, activeTradesKeyboard(getOpenPaperTrades()));
+        return safeEdit(ctx, `⚠️ Couldn't fetch a current price for ${escapeMd(t.symbol) || t.token_address} — left open.`, activeTradesKeyboard(getOpenPaperTrades()));
       }
       const pnlPct = ((pair.priceUsd - t.entry_price_usd) / t.entry_price_usd) * 100;
       const pnlUsd = t.position_size_usd * (pnlPct / 100);
       closePaperTrade(id, { exitPriceUsd: pair.priceUsd, exitReason: "manual_close", pnlUsd, pnlPct });
     } catch (err) {
       return safeEdit(ctx, `⚠️ Failed to close #${id}: ${err.message}`, activeTradesKeyboard(getOpenPaperTrades()));
+    } finally {
+      releaseTradeLock(lockKey);
     }
     const { trades, totalUnrealizedUsd } = await getOpenTradesWithLivePnl();
     trades.sort((a, b) => (b.pnlPct ?? -Infinity) - (a.pnlPct ?? -Infinity));
-    await safeEdit(ctx, buildActiveTradesMessage({ trades, totalUnrealizedUsd }), activeTradesKeyboard(trades));
+    await safeEdit(ctx, buildActiveTradesMessage({ trades, totalUnrealizedUsd, mode: "paper" }), activeTradesKeyboard(trades));
   });
 
   bot.action(/^paperedit:(.+)$/, async (ctx) => {
@@ -1042,7 +1139,7 @@ export function createBot(stats, chainControls, digestControls) {
     }
     const lines = closed.map((t) => {
       const won = t.pnl_pct >= 0;
-      return `${won ? "🟢" : "🔴"} *${t.symbol || "?"}* — ${t.pnl_pct >= 0 ? "+" : ""}${t.pnl_pct.toFixed(1)}% (${t.exit_reason})`;
+      return `${won ? "🟢" : "🔴"} *${escapeMd(t.symbol) || "?"}* — ${t.pnl_pct >= 0 ? "+" : ""}${t.pnl_pct.toFixed(1)}% (${t.exit_reason})`;
     });
     await safeEdit(ctx, `📜 *Closed Paper Trades* (last ${closed.length})\n\n${lines.join("\n")}`, backKeyboard());
   });
@@ -1170,7 +1267,8 @@ export function createBot(stats, chainControls, digestControls) {
     if (!(await requireRealTradingUnlock(ctx))) return;
     const { trades, totalUnrealizedUsd } = await getOpenRealTradesWithLivePnl();
     trades.sort((a, b) => (b.pnlPct ?? -Infinity) - (a.pnlPct ?? -Infinity));
-    await safeEdit(ctx, buildActiveTradesMessage({ trades, totalUnrealizedUsd }), realActiveTradesKeyboard(trades));
+    const walletBalances = await getWalletBalancesForTrades(trades);
+    await safeEdit(ctx, buildActiveTradesMessage({ trades, totalUnrealizedUsd, walletBalances, mode: "real" }), realActiveTradesKeyboard(trades));
   });
 
   bot.action("realconfirm:closeall", async (ctx) => {
@@ -1224,6 +1322,11 @@ export function createBot(stats, chainControls, digestControls) {
       await ctx.answerCbQuery("Already closed or not found.");
       return;
     }
+    const lockKey = `${t.chain}:${t.token_address}`;
+    if (!acquireTradeLock(lockKey)) {
+      await ctx.answerCbQuery("A trade for this token is already in progress — please wait.");
+      return;
+    }
     await ctx.answerCbQuery(`Selling #${id}…`);
     const settings = loadRealTradingSettings();
     const chainDef = CHAINS[t.chain];
@@ -1231,7 +1334,7 @@ export function createBot(stats, chainControls, digestControls) {
       const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
       const pair = pairSummary(dexPair, t.token_address);
       if (!pair || !isSanePrice(pair.priceUsd)) {
-        return safeEdit(ctx, `⚠️ Couldn't fetch a current price for ${t.symbol || t.token_address} — left open.`, realActiveTradesKeyboard(getOpenRealTrades()));
+        return safeEdit(ctx, `⚠️ Couldn't fetch a current price for ${escapeMd(t.symbol) || t.token_address} — left open.`, realActiveTradesKeyboard(getOpenRealTrades()));
       }
       const chain = { key: t.chain, ...chainDef };
       const sellResult = await sellToken(chain, t.token_address, t.token_amount_raw, settings.slippageBps);
@@ -1248,10 +1351,13 @@ export function createBot(stats, chainControls, digestControls) {
       });
     } catch (err) {
       return safeEdit(ctx, `⚠️ Failed to sell #${id}: ${err.message}`, realActiveTradesKeyboard(getOpenRealTrades()));
+    } finally {
+      releaseTradeLock(lockKey);
     }
     const { trades, totalUnrealizedUsd } = await getOpenRealTradesWithLivePnl();
     trades.sort((a, b) => (b.pnlPct ?? -Infinity) - (a.pnlPct ?? -Infinity));
-    await safeEdit(ctx, buildActiveTradesMessage({ trades, totalUnrealizedUsd }), realActiveTradesKeyboard(trades));
+    const walletBalances = await getWalletBalancesForTrades(trades);
+    await safeEdit(ctx, buildActiveTradesMessage({ trades, totalUnrealizedUsd, walletBalances, mode: "real" }), realActiveTradesKeyboard(trades));
   });
 
   bot.action(/^realedit:(.+)$/, async (ctx) => {
@@ -1274,7 +1380,7 @@ export function createBot(stats, chainControls, digestControls) {
     }
     const lines = closed.map((t) => {
       const won = t.pnl_pct >= 0;
-      return `${won ? "🟢" : "🔴"} *${t.symbol || "?"}* — ${t.pnl_pct >= 0 ? "+" : ""}${t.pnl_pct.toFixed(1)}% (${t.exit_reason})`;
+      return `${won ? "🟢" : "🔴"} *${escapeMd(t.symbol) || "?"}* — ${t.pnl_pct >= 0 ? "+" : ""}${t.pnl_pct.toFixed(1)}% (${t.exit_reason})`;
     });
     await safeEdit(ctx, `📜 *Closed Real Trades* (last ${closed.length})\n\n${lines.join("\n")}`, backKeyboard());
   });

@@ -1,0 +1,59 @@
+{
+  "analyzedAt": 1783780820190,
+  "totalUsable": 530,
+  "activeCount": 502,
+  "deadCount": 28,
+  "overallRugRatePct": 83.58490566037736,
+  "liquidityBucketsAll": {
+    "< 0.5 native": {
+      "total": 146,
+      "rugged": 108
+    },
+    "0.5 - 1": {
+      "total": 55,
+      "rugged": 48
+    },
+    "1 - 2": {
+      "total": 180,
+      "rugged": 163
+    },
+    "2 - 5": {
+      "total": 68,
+      "rugged": 60
+    },
+    "5 - 10": {
+      "total": 74,
+      "rugged": 59
+    },
+    ">= 10": {
+      "total": 7,
+      "rugged": 5
+    }
+  },
+  "liquidityBucketsActiveOnly": {
+    "< 0.5 native": {
+      "total": 124,
+      "rugged": 100
+    },
+    "0.5 - 1": {
+      "total": 53,
+      "rugged": 48
+    },
+    "1 - 2": {
+      "total": 179,
+      "rugged": 162
+    },
+    "2 - 5": {
+      "total": 68,
+      "rugged": 60
+    },
+    "5 - 10": {
+      "total": 72,
+      "rugged": 59
+    },
+    ">= 10": {
+      "total": 6,
+      "rugged": 5
+    }
+  }
+}

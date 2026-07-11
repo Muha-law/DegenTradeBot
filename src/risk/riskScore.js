@@ -77,7 +77,9 @@ function scoreLiquidityLock(sec, pair, flags) {
     else if (lockedPct >= 0.4) points += 4;
     else flags.push("LP largely unlocked/unburned");
   } else {
-    points += 2; // no LP holder data available — small, not neutral, credit
+    // No LP holder data available — common for very fresh tokens, and
+    // exactly where an unlocked LP is most dangerous. Treated as a
+    // missing-data risk like everywhere else in this file (no bonus).
     flags.push("LP lock status unavailable");
   }
 
@@ -157,10 +159,23 @@ function gradeFor(score) {
 export async function computeRiskScore(chain, tokenAddress) {
   const flags = [];
 
+  let goplusUnsupported = false;
   const [security, dexPair] = await Promise.all([
-    getTokenSecurity(chain.goplusChainId, tokenAddress).catch(() => null),
+    getTokenSecurity(chain.goplusChainId, tokenAddress).catch((err) => {
+      // GoPlus returns code 2022 "The main chain is not supported" for
+      // chains it hasn't onboarded (confirmed: Robinhood Chain isn't in
+      // /supported_chains at all) — distinct from a transient API error,
+      // and worth surfacing since it means contract-safety/holder/LP-lock
+      // scoring below is running on zero real data for this chain, not
+      // just this one token.
+      if (/not supported/i.test(err.message)) goplusUnsupported = true;
+      return null;
+    }),
     getBestPair(chain.dexscreenerChainId, tokenAddress).catch(() => null),
   ]);
+  if (goplusUnsupported) {
+    flags.push("⚠️ GoPlus doesn't cover this chain — contract safety, holder, and LP-lock checks are all running blind");
+  }
   const pair = pairSummary(dexPair, tokenAddress);
 
   // marketCap/fdv from DexScreener only apply when our token is the pair's

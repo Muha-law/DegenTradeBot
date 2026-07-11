@@ -21,7 +21,13 @@ export async function fetchCallPct(call) {
 // they never drift out of sync with each other.
 export async function buildDigestEntries() {
   const windowMs = config.priceUpdateWindowHours * 60 * 60 * 1000;
-  const active = getActiveCalls(windowMs);
+  // getActiveCalls() has no age filter of its own by design (see its comment
+  // in store/db.js) — normally the milestone-checker cron deactivates expired
+  // rows as a side effect every 2 minutes, but that cron skips its run while
+  // the bot is paused, so this view needs its own independent expiry check
+  // rather than trusting `active` to already be current.
+  const now = Date.now();
+  const active = getActiveCalls().filter((call) => now - call.called_at < windowMs);
 
   const entries = await Promise.all(
     active.map(async (call) => {

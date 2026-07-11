@@ -3,13 +3,15 @@ import { CHAINS } from "./chains.js";
 import { isPaused } from "./botState.js";
 import { loadRealTradingSettings } from "./realTradingSettings.js";
 import { getBestPair, pairSummary } from "./risk/dexscreener.js";
+import { checkFreshLiquidity } from "./filters/filter.js";
 import { shouldExitMooner } from "./ai/superComando.js";
-import { buyToken, sellToken } from "./execution/swapExecutor.js";
+import { buyToken, sellToken, verifySellable } from "./execution/swapExecutor.js";
 import { hasWallet } from "./wallet.js";
 import {
   openRealTrade,
   getOpenRealTrades,
   touchRealTrade,
+  touchRealTradeStalePrice,
   closeRealTrade,
   getRealTradingStats,
   activateRealComandoMode,
@@ -27,6 +29,12 @@ import {
 const CHECK_CRON = "*/2 * * * *";
 // Same throttle rationale as paper trading's Super Comando — see paperTrading.js.
 const COMANDO_AI_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+
+// Same rationale as paperTrading.js's constant of the same name — 30
+// minutes of sustained unreadable price is well past any transient blip
+// we've observed self-heal, and is when the checker stops skipping the
+// position and forces a real sell attempt instead.
+const STALE_PRICE_EXIT_MINUTES = 30;
 
 function isSanePrice(n) {
   return typeof n === "number" && Number.isFinite(n) && n > 0 && n < 1e12;
@@ -60,6 +68,16 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, na
     return;
   }
 
+  // Fresh re-check right before spending real money — the filter pass that
+  // got us here can be seconds to minutes stale, long enough for liquidity
+  // to have been pulled in the meantime.
+  const liq = await checkFreshLiquidity(chain, tokenAddress);
+  if (!liq.pass) {
+    console.error(`[realTrading] ${symbol}: ${liq.reason} — aborting buy`);
+    await postUpdate(bot, buildRealTradeFailedMessage({ chain, tokenAddress, name, symbol, reason: liq.reason }));
+    return;
+  }
+
   let result;
   try {
     result = await buyToken(chain, tokenAddress, settings.positionSizeUsd, settings.slippageBps);
@@ -89,6 +107,62 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, na
     // happen given hasBeenCalled dedup upstream, but never silently strand
     // a real position untracked).
     console.error(`[realTrading] bought ${symbol} but DB row already existed — tx ${result.txHash} needs manual reconciliation`);
+    return;
+  }
+
+  // Best-effort honeypot check using the real, just-bought balance — see
+  // swapExecutor.js's verifySellable for why this matters on a chain GoPlus
+  // doesn't cover. Catches the blacklist/pause/trading-disabled pattern in
+  // seconds instead of leaving a bad position to be discovered hours later.
+  const sellCheck = await verifySellable(chain, tokenAddress, result.tokenAmountRaw);
+  if (!sellCheck.sellable) {
+    console.error(`[realTrading] ⚠️ SELLABILITY CHECK FAILED for ${symbol} (${chain.key}): ${sellCheck.reason} — likely honeypot, attempting immediate exit`);
+    await postUpdate(
+      bot,
+      buildRealTradeFailedMessage({
+        chain,
+        tokenAddress,
+        name,
+        symbol,
+        reason: `⚠️ Bought successfully, but a sellability check right after failed — likely a honeypot: ${sellCheck.reason}. Attempting immediate exit.`,
+      })
+    );
+    try {
+      const sellResult = await sellToken(chain, tokenAddress, result.tokenAmountRaw, settings.slippageBps);
+      const pnlUsd = sellResult.proceedsUsd - settings.positionSizeUsd - result.gasUsd - sellResult.gasUsd;
+      const pnlPct = (pnlUsd / settings.positionSizeUsd) * 100;
+      closeRealTrade(res.lastInsertRowid, {
+        exitPriceUsd: 0,
+        exitReason: "honeypot_immediate_exit",
+        pnlUsd,
+        pnlPct,
+        nativeReceived: sellResult.nativeReceived,
+        exitTxHash: sellResult.txHash,
+        exitGasUsd: sellResult.gasUsd,
+      });
+      await postUpdate(
+        bot,
+        buildRealTradeCloseMessage({
+          chain,
+          tokenAddress,
+          name,
+          symbol,
+          entryPriceUsd: result.entryPriceUsd,
+          exitPriceUsd: 0,
+          pnlUsd,
+          pnlPct,
+          exitReason: "honeypot_immediate_exit",
+          txHash: sellResult.txHash,
+          gasUsd: sellResult.gasUsd,
+        })
+      );
+    } catch (err) {
+      // Expected for a true honeypot — the static-call already predicted
+      // this. Leave the position open; the normal 2-minute checker (and the
+      // stale-price forced-exit fallback) will keep retrying at zero cost
+      // (these reverts happen at the free gas-estimate stage, never broadcast).
+      console.error(`[realTrading] immediate exit attempt also failed for ${symbol} (expected for a confirmed honeypot):`, err.message);
+    }
     return;
   }
 
@@ -125,7 +199,56 @@ export function startRealTradeChecker(bot) {
         const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
         const pair = pairSummary(dexPair, t.token_address);
         if (!pair || !isSanePrice(pair.priceUsd)) {
-          touchRealTrade(t.id);
+          const staleMinutes = t.price_unavailable_since ? (Date.now() - t.price_unavailable_since) / 60000 : 0;
+          if (t.price_unavailable_since && staleMinutes >= STALE_PRICE_EXIT_MINUTES) {
+            // Sustained unreadable price — most likely a drained/dead pool.
+            // Force a real sell attempt anyway rather than leave this stuck
+            // forever with no way to ever hit stop-loss (this is exactly
+            // what let a position sit unmanaged once its pool's liquidity
+            // got drained to near-zero). Whatever proceeds come back are
+            // real, even if near zero; if the sell itself fails (e.g. truly
+            // zero liquidity), leave it open and retry next cycle — same
+            // discipline as any other exit attempt in this loop.
+            console.error(`[realTrading] ${t.symbol} (${t.chain}) price unavailable for ${staleMinutes.toFixed(0)}m — forcing sell attempt`);
+            let sellResult;
+            try {
+              sellResult = await sellToken(chain, t.token_address, t.token_amount_raw, settings.slippageBps);
+            } catch (err) {
+              console.error(`[realTrading] stale-price forced sell failed for ${t.symbol} (${t.chain}):`, err.message);
+              touchRealTradeStalePrice(t.id);
+              continue;
+            }
+
+            const pnlUsd = sellResult.proceedsUsd - t.position_size_usd - t.entry_gas_usd - sellResult.gasUsd;
+            const realizedPnlPct = (pnlUsd / t.position_size_usd) * 100;
+            closeRealTrade(t.id, {
+              exitPriceUsd: 0,
+              exitReason: "stale_price_exit",
+              pnlUsd,
+              pnlPct: realizedPnlPct,
+              nativeReceived: sellResult.nativeReceived,
+              exitTxHash: sellResult.txHash,
+              exitGasUsd: sellResult.gasUsd,
+            });
+            await postUpdate(
+              bot,
+              buildRealTradeCloseMessage({
+                chain,
+                tokenAddress: t.token_address,
+                name: t.name,
+                symbol: t.symbol,
+                entryPriceUsd: t.entry_price_usd,
+                exitPriceUsd: 0,
+                pnlUsd,
+                pnlPct: realizedPnlPct,
+                exitReason: "stale_price_exit",
+                txHash: sellResult.txHash,
+                gasUsd: sellResult.gasUsd,
+              })
+            );
+          } else {
+            touchRealTradeStalePrice(t.id);
+          }
           continue;
         }
 

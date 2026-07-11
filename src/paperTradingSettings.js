@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { getDataDir } from "./dataDir.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const settingsPath = path.join(__dirname, "..", "data", "paperTradingSettings.json");
+const settingsPath = path.join(getDataDir(), "paperTradingSettings.json");
 
 const DEFAULTS = {
   enabled: true,

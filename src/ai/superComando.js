@@ -1,7 +1,14 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
 
-const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODEL = "llama-3.1-8b-instant";
+const MODEL = "claude-haiku-4-5";
+
+// Cheap, throttled (once per 5m per riding position — see paperTrading.js /
+// realTrading.js) exit-decision calls. Not latency-sensitive like
+// rugDetector's buy-path screen, so this runs on Claude instead of Groq —
+// better judgment on "is this a reversal or normal noise" for a real-money
+// decision, at negligible cost for this call volume.
+const client = config.anthropicApiKey ? new Anthropic({ apiKey: config.anthropicApiKey }) : null;
 
 const SYSTEM_PROMPT = `You help decide whether to sell a crypto paper-trading position that has already blown past its
 normal take-profit target and is being held longer in hopes of a bigger run ("let it ride" mode, nicknamed
@@ -14,9 +21,17 @@ Lean toward selling when: price has pulled back meaningfully from its peak (lost
 it has been riding a long time without setting new highs (momentum stalling), or the pullback from peak looks like
 a reversal starting rather than normal volatility.
 Lean toward holding when: price is at or near its peak, or the pullback from peak is small and looks like normal
-noise rather than a trend change.
+noise rather than a trend change.`;
 
-Respond with ONLY a JSON object of the exact shape: {"sell": boolean, "reasoning": string}. No other text.`;
+const RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    sell: { type: "boolean", description: "true to sell now, false to keep holding" },
+    reasoning: { type: "string", description: "brief explanation for the decision" },
+  },
+  required: ["sell", "reasoning"],
+  additionalProperties: false,
+};
 
 // Advises whether to exit a paper trade that's already past its take-profit
 // target and being held longer (Super Comando mode). Gracefully defaults to
@@ -24,40 +39,31 @@ Respond with ONLY a JSON object of the exact shape: {"sell": boolean, "reasoning
 // floor-protection rule in paperTrading.js is the actual safety net, so a
 // missed AI check just costs one data point, not real risk.
 export async function shouldExitMooner({ symbol, name, pnlPct, peakPct, floorPct, minutesHeld }) {
-  if (!config.groqApiKey) return { sell: false, reasoning: null };
+  if (!client) return { sell: false, reasoning: null };
 
   try {
-    const res = await fetch(GROQ_API_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.groqApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: GROQ_MODEL,
-        response_format: { type: "json_object" },
-        temperature: 0,
-        max_tokens: 250,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: `Token: ${name || "Unknown"} (${symbol || "?"})\nCurrent PnL: +${pnlPct.toFixed(1)}%\nPeak PnL so far: +${peakPct.toFixed(1)}%\nProtected floor (auto-sells below this): +${floorPct.toFixed(1)}%\nRiding for: ${minutesHeld.toFixed(0)} minutes since crossing the floor`,
-          },
-        ],
-      }),
+    const response = await client.messages.create({
+      model: MODEL,
+      max_tokens: 250,
+      system: SYSTEM_PROMPT,
+      output_config: { format: { type: "json_schema", schema: RESPONSE_SCHEMA } },
+      messages: [
+        {
+          role: "user",
+          content: `Token: ${name || "Unknown"} (${symbol || "?"})\nCurrent PnL: +${pnlPct.toFixed(1)}%\nPeak PnL so far: +${peakPct.toFixed(1)}%\nProtected floor (auto-sells below this): +${floorPct.toFixed(1)}%\nRiding for: ${minutesHeld.toFixed(0)} minutes since crossing the floor`,
+        },
+      ],
     });
 
-    if (!res.ok) {
-      console.error(`[superComando] Groq API error ${res.status}: ${await res.text()}`);
+    if (response.stop_reason === "refusal") {
+      console.error("[superComando] Claude declined the request, holding");
       return { sell: false, reasoning: null };
     }
 
-    const data = await res.json();
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) return { sell: false, reasoning: null };
+    const textBlock = response.content.find((b) => b.type === "text");
+    if (!textBlock) return { sell: false, reasoning: null };
 
-    const parsed = JSON.parse(content);
+    const parsed = JSON.parse(textBlock.text);
     return { sell: Boolean(parsed.sell), reasoning: parsed.reasoning || null };
   } catch (err) {
     console.error("[superComando] AI exit check failed, holding:", err.message);

@@ -30,6 +30,21 @@ export function startPairWatcher(chain, onNewToken) {
     contracts.forEach((c) => c.removeAllListeners());
     provider?.destroy();
 
+    try {
+      connectOnce();
+    } catch (err) {
+      // A sync throw here (bad RPC URL, a factory event/ABI mismatch, etc.)
+      // happens before the ws close/error handlers are attached below, so
+      // without this catch it would only be caught by index.js's blanket
+      // uncaughtException handler — which just logs and does nothing, leaving
+      // this chain's watcher silently and permanently dead. Route it through
+      // the same reconnect path as a normal disconnect instead.
+      console.error(`[${chain.key}] failed to connect:`, err.message);
+      scheduleReconnect(`connect error: ${err.message}`);
+    }
+  }
+
+  function connectOnce() {
     const wssUrl = getRpcUrl(chain);
     provider = new ethers.WebSocketProvider(wssUrl);
     contracts = [];

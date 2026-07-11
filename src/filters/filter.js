@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { getBestPair, pairSummary } from "../risk/dexscreener.js";
+import { getDataDir, seedFileIfMissing } from "../dataDir.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const filtersPath = path.join(__dirname, "..", "..", "data", "filters.json");
+const filtersPath = path.join(getDataDir(), "filters.json");
 
 export function loadFilters() {
+  seedFileIfMissing("filters.json");
   return JSON.parse(fs.readFileSync(filtersPath, "utf8"));
 }
 
@@ -14,6 +15,27 @@ export function saveFilters(filters) {
 }
 
 const isTrue = (v) => v === "1" || v === 1 || v === true;
+
+// Cheap, DexScreener-only re-check of liquidity against the same floor
+// applyFilter already enforces — used right before a buy executes to catch
+// a rug that happened in the gap between the original filter pass and the
+// on-chain purchase. Deliberately skips the GoPlus/Etherscan/AI round trip
+// that computeRiskScore does — this only needs to answer "is the liquidity
+// still there," not re-score the whole token.
+export async function checkFreshLiquidity(chain, tokenAddress) {
+  const filters = loadFilters();
+  const dexPair = await getBestPair(chain.dexscreenerChainId, tokenAddress);
+  const pair = pairSummary(dexPair, tokenAddress);
+  const liquidityUsd = pair?.liquidityUsd || 0;
+  if (liquidityUsd < filters.minLiquidityUsd) {
+    return {
+      pass: false,
+      liquidityUsd,
+      reason: `Liquidity dropped to $${liquidityUsd.toFixed(0)} (below $${filters.minLiquidityUsd} minimum) — rug between call and buy`,
+    };
+  }
+  return { pass: true, liquidityUsd };
+}
 
 // Decides whether a scored token gets "called". Returns { pass, reasons }.
 export function applyFilter(riskResult, tokenAgeMinutes) {
@@ -81,7 +103,13 @@ export function applyFilter(riskResult, tokenAgeMinutes) {
         const locked = isTrue(h.is_locked) || h.tag === "Burn Address";
         return sum + (locked ? Number(h.percent) || 0 : 0);
       }, 0);
-      if (lpHolders.length > 0 && lockedPct < 0.5) reasons.push("LP not majority locked/burned");
+      // No length guard here on purpose — GoPlus commonly returns an empty
+      // lp_holders array for tokens that are only seconds/minutes old (the
+      // exact tokens this bot calls), and treating "no data" as "skip the
+      // check" let every fresh launch through regardless of this setting.
+      if (lockedPct < 0.5) {
+        reasons.push(lpHolders.length > 0 ? "LP not majority locked/burned" : "LP lock status unknown (no data yet) — treated as unlocked");
+      }
     }
   }
 

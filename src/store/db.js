@@ -1,9 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { getDataDir } from "../dataDir.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dbPath = path.join(__dirname, "..", "..", "data", "bot.sqlite");
+const dbPath = path.join(getDataDir(), "bot.sqlite");
 
 export const db = new DatabaseSync(dbPath);
 db.exec("PRAGMA journal_mode = WAL");
@@ -160,6 +159,15 @@ addColumnIfMissing("real_trades", "comando_active", "INTEGER NOT NULL DEFAULT 0"
 addColumnIfMissing("real_trades", "comando_activated_at", "INTEGER");
 addColumnIfMissing("real_trades", "comando_peak_pct", "REAL");
 addColumnIfMissing("real_trades", "comando_last_ai_check_at", "INTEGER");
+// Set the first time a position's price comes back unreadable/insane
+// (isSanePrice fails) and cleared the moment a sane price is seen again —
+// lets the checker distinguish a transient data blip from a genuinely dead
+// pool (sustained unavailability) and force an exit attempt in the latter
+// case instead of silently skipping the position forever. See
+// touch*TradeStalePrice below and the checker loops in paperTrading.js /
+// realTrading.js.
+addColumnIfMissing("paper_trades", "price_unavailable_since", "INTEGER");
+addColumnIfMissing("real_trades", "price_unavailable_since", "INTEGER");
 
 export function hasSeenPair(chain, pairAddress) {
   return !!db
@@ -390,7 +398,19 @@ export function countOpenPaperTrades() {
 }
 
 export function touchPaperTrade(id) {
-  db.prepare("UPDATE paper_trades SET last_checked_at = ? WHERE id = ?").run(Date.now(), id);
+  db.prepare("UPDATE paper_trades SET last_checked_at = ?, price_unavailable_since = NULL WHERE id = ?").run(Date.now(), id);
+}
+
+// Called instead of touchPaperTrade when this check couldn't get a sane
+// price. COALESCE only sets price_unavailable_since on the *first* such
+// check — later calls leave the original timestamp alone, so the caller can
+// measure how long the position has actually been stuck, not just that it
+// failed this one time.
+export function touchPaperTradeStalePrice(id) {
+  const now = Date.now();
+  db.prepare(
+    "UPDATE paper_trades SET last_checked_at = ?, price_unavailable_since = COALESCE(price_unavailable_since, ?) WHERE id = ?"
+  ).run(now, now, id);
 }
 
 export function closePaperTrade(id, { exitPriceUsd, exitReason, pnlUsd, pnlPct }) {
@@ -461,7 +481,19 @@ export function countOpenRealTrades() {
 }
 
 export function touchRealTrade(id) {
-  db.prepare("UPDATE real_trades SET last_checked_at = ? WHERE id = ?").run(Date.now(), id);
+  db.prepare("UPDATE real_trades SET last_checked_at = ?, price_unavailable_since = NULL WHERE id = ?").run(Date.now(), id);
+}
+
+// Same purpose as touchPaperTradeStalePrice — tracks how long a real
+// position has had no sane price so realTrading.js can force a sell attempt
+// after a sustained outage instead of leaving the position stuck forever
+// (this is what let Sunshine/unicorn sit unmanaged with no stop-loss chance
+// once their pools' liquidity got drained to near-zero).
+export function touchRealTradeStalePrice(id) {
+  const now = Date.now();
+  db.prepare(
+    "UPDATE real_trades SET last_checked_at = ?, price_unavailable_since = COALESCE(price_unavailable_since, ?) WHERE id = ?"
+  ).run(now, now, id);
 }
 
 export function closeRealTrade(id, { exitPriceUsd, exitReason, pnlUsd, pnlPct, nativeReceived, exitTxHash, exitGasUsd }) {

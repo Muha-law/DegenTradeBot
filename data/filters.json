@@ -7,7 +7,7 @@
   "minHolderCount": 0,
   "maxTop10HolderPercent": 100,
   "maxCreatorHolderPercent": 100,
-  "requireLpLockedOrBurned": false,
+  "requireLpLockedOrBurned": true,
   "requireNotHoneypot": true,
   "requireOpenSource": false,
   "blockMintable": false,

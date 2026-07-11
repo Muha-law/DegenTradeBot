@@ -19,82 +19,95 @@ const FOLLOWUP_MIN_MOVE_PCT = 30; // ...and only then if it moved at least this 
 // message, checked no more than once every 30 min. Everything quieter than
 // that only shows up in the periodic digest, not as its own message.
 export function startMilestoneChecker(bot) {
+  // See the matching guard in trackUpdater.js — this loop is sequential and
+  // awaits per-call work, so an overlapping tick (list grows, price API
+  // slows down) could otherwise double-send a milestone/follow-up alert.
+  let running = false;
   const task = cron.schedule(CHECK_CRON, async () => {
-    if (isPaused()) return;
-    const windowMs = config.priceUpdateWindowHours * 60 * 60 * 1000;
-    const active = getActiveCalls();
-
-    for (const call of active) {
-      const chainDef = CHAINS[call.chain];
-      if (!chainDef) continue;
-      const chain = { key: call.chain, ...chainDef };
-
-      try {
-        if (Date.now() - call.called_at >= windowMs) {
-          deactivateCall(call.id);
-          continue;
-        }
-
-        const result = await fetchCallPct(call);
-        if (!result) {
-          updateCallProgress(call.id, { lastUpdatedAt: Date.now() });
-          continue;
-        }
-        const { pair, pct } = result;
-
-        const crossed = MILESTONES.filter((m) => pct >= m && m > call.best_milestone_hit);
-        if (crossed.length > 0) {
-          const milestonePct = crossed[crossed.length - 1];
-          await postUpdate(
-            bot,
-            buildMilestoneMessage({
-              chain,
-              tokenAddress: call.token_address,
-              name: call.name,
-              symbol: call.symbol,
-              trackPriceUsd: call.call_price_usd,
-              trackMarketCapUsd: call.call_market_cap_usd,
-              currentPair: pair,
-              milestonePct,
-              sinceMs: call.called_at,
-            })
-          );
-          updateCallMilestone(call.id, { bestMilestoneHit: milestonePct, lastUpdateSentAt: Date.now(), lastUpdatePct: pct });
-          continue;
-        }
-
-        if (call.best_milestone_hit > 0) {
-          const lastPct = call.last_update_pct ?? call.best_milestone_hit;
-          const sinceLastMs = call.last_update_sent_at ? Date.now() - call.last_update_sent_at : Infinity;
-          if (sinceLastMs >= FOLLOWUP_MIN_GAP_MS && Math.abs(pct - lastPct) >= FOLLOWUP_MIN_MOVE_PCT) {
-            await postUpdate(
-              bot,
-              buildFollowUpMessage({
-                chain,
-                tokenAddress: call.token_address,
-                name: call.name,
-                symbol: call.symbol,
-                callPriceUsd: call.call_price_usd,
-                currentPair: pair,
-                lastPct,
-                currentPct: pct,
-                sinceMs: call.called_at,
-              })
-            );
-            updateCallMilestone(call.id, { bestMilestoneHit: call.best_milestone_hit, lastUpdateSentAt: Date.now(), lastUpdatePct: pct });
-            continue;
-          }
-        }
-
-        updateCallProgress(call.id, { lastUpdatedAt: Date.now() });
-      } catch (err) {
-        console.error(`[milestoneChecker] failed ${call.symbol} (${call.chain}):`, err.message);
-      }
+    if (isPaused() || running) return;
+    running = true;
+    try {
+      await runMilestoneCheck(bot);
+    } finally {
+      running = false;
     }
   });
 
   console.log(`[milestoneChecker] scheduled every 2m`);
   return task;
+}
+
+async function runMilestoneCheck(bot) {
+  const windowMs = config.priceUpdateWindowHours * 60 * 60 * 1000;
+  const active = getActiveCalls();
+
+  for (const call of active) {
+    const chainDef = CHAINS[call.chain];
+    if (!chainDef) continue;
+    const chain = { key: call.chain, ...chainDef };
+
+    try {
+      if (Date.now() - call.called_at >= windowMs) {
+        deactivateCall(call.id);
+        continue;
+      }
+
+      const result = await fetchCallPct(call);
+      if (!result) {
+        updateCallProgress(call.id, { lastUpdatedAt: Date.now() });
+        continue;
+      }
+      const { pair, pct } = result;
+
+      const crossed = MILESTONES.filter((m) => pct >= m && m > call.best_milestone_hit);
+      if (crossed.length > 0) {
+        const milestonePct = crossed[crossed.length - 1];
+        await postUpdate(
+          bot,
+          buildMilestoneMessage({
+            chain,
+            tokenAddress: call.token_address,
+            name: call.name,
+            symbol: call.symbol,
+            trackPriceUsd: call.call_price_usd,
+            trackMarketCapUsd: call.call_market_cap_usd,
+            currentPair: pair,
+            milestonePct,
+            sinceMs: call.called_at,
+          })
+        );
+        updateCallMilestone(call.id, { bestMilestoneHit: milestonePct, lastUpdateSentAt: Date.now(), lastUpdatePct: pct });
+        continue;
+      }
+
+      if (call.best_milestone_hit > 0) {
+        const lastPct = call.last_update_pct ?? call.best_milestone_hit;
+        const sinceLastMs = call.last_update_sent_at ? Date.now() - call.last_update_sent_at : Infinity;
+        if (sinceLastMs >= FOLLOWUP_MIN_GAP_MS && Math.abs(pct - lastPct) >= FOLLOWUP_MIN_MOVE_PCT) {
+          await postUpdate(
+            bot,
+            buildFollowUpMessage({
+              chain,
+              tokenAddress: call.token_address,
+              name: call.name,
+              symbol: call.symbol,
+              callPriceUsd: call.call_price_usd,
+              currentPair: pair,
+              lastPct,
+              currentPct: pct,
+              sinceMs: call.called_at,
+            })
+          );
+          updateCallMilestone(call.id, { bestMilestoneHit: call.best_milestone_hit, lastUpdateSentAt: Date.now(), lastUpdatePct: pct });
+          continue;
+        }
+      }
+
+      updateCallProgress(call.id, { lastUpdatedAt: Date.now() });
+    } catch (err) {
+      console.error(`[milestoneChecker] failed ${call.symbol} (${call.chain}):`, err.message);
+    }
+  }
 }
 
 // The scheduled bulk summary — one message covering every active call,

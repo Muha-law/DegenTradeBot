@@ -4,10 +4,12 @@ import { isPaused } from "./botState.js";
 import { loadPaperTradingSettings } from "./paperTradingSettings.js";
 import { getBestPair, pairSummary } from "./risk/dexscreener.js";
 import { shouldExitMooner } from "./ai/superComando.js";
+import { checkFreshLiquidity } from "./filters/filter.js";
 import {
   openPaperTrade,
   getOpenPaperTrades,
   touchPaperTrade,
+  touchPaperTradeStalePrice,
   closePaperTrade,
   getPaperTradingStats,
   activateComandoMode,
@@ -26,6 +28,14 @@ const CHECK_CRON = "*/2 * * * *";
 // this bot resolve within 0-30 minutes — a 15m throttle meant the AI rarely
 // got a chance to weigh in before the trade was already over.
 const COMANDO_AI_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+
+// How long a position's price can stay unreadable/insane (isSanePrice
+// fails — e.g. a pool drained to near-zero liquidity) before the checker
+// stops silently skipping it and forces a close instead. 30 minutes (15
+// checks at the 2m cron interval) is well past any transient RPC/DexScreener
+// blip we've observed self-heal within a minute or two — long enough to
+// rule those out, short enough to not leave real risk unmanaged for long.
+const STALE_PRICE_EXIT_MINUTES = 30;
 
 function isSanePrice(n) {
   return typeof n === "number" && Number.isFinite(n) && n > 0 && n < 1e12;
@@ -57,6 +67,14 @@ export async function openPaperTradeIfRoom(bot, { chain, tokenAddress, symbol, n
   const stats = getPaperTradingStats();
   if (stats.deployedUsd + settings.positionSizeUsd > settings.totalBudgetUsd) {
     console.log(`[paperTrading] budget exhausted (${stats.deployedUsd}/${settings.totalBudgetUsd}) — skipping ${symbol}`);
+    return;
+  }
+
+  // Mirrors the real-trading guard so paper trading's win rate stays a
+  // meaningful signal for how the real strategy would actually perform.
+  const liq = await checkFreshLiquidity(chain, tokenAddress);
+  if (!liq.pass) {
+    console.log(`[paperTrading] ${symbol}: ${liq.reason} — skipping`);
     return;
   }
 
@@ -104,7 +122,32 @@ export function startPaperTradeChecker(bot) {
         const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
         const pair = pairSummary(dexPair, t.token_address);
         if (!pair || !isSanePrice(pair.priceUsd)) {
-          touchPaperTrade(t.id);
+          const staleMinutes = t.price_unavailable_since ? (Date.now() - t.price_unavailable_since) / 60000 : 0;
+          if (t.price_unavailable_since && staleMinutes >= STALE_PRICE_EXIT_MINUTES) {
+            // Sustained unreadable price — most likely a drained/dead pool.
+            // No real price exists to simulate an exit at, so assume a
+            // total loss rather than leave this stuck forever with no way
+            // to ever hit stop-loss.
+            const pnlUsd = -t.position_size_usd;
+            const pnlPct = -100;
+            closePaperTrade(t.id, { exitPriceUsd: 0, exitReason: "stale_price", pnlUsd, pnlPct });
+            await postUpdate(
+              bot,
+              buildPaperTradeCloseMessage({
+                chain,
+                tokenAddress: t.token_address,
+                name: t.name,
+                symbol: t.symbol,
+                entryPriceUsd: t.entry_price_usd,
+                exitPriceUsd: 0,
+                pnlUsd,
+                pnlPct,
+                exitReason: "stale_price",
+              })
+            );
+          } else {
+            touchPaperTradeStalePrice(t.id);
+          }
           continue;
         }
 
