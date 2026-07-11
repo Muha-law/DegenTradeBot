@@ -179,11 +179,38 @@ async function getV3Quote(chain, tokenIn, tokenOut, fee, amountIn) {
   }
 }
 
+// Slippage tolerance only protects against "worse than expected by X%" —
+// if the pool was already drained between the DexScreener snapshot (`pair`)
+// and this on-chain quote, the "expected" baseline for that percentage is
+// itself already catastrophic, so a normal slippage check does nothing.
+// Confirmed live: BEAR's pool held 1 wei of native reserves by the time the
+// buy landed (fully drained), and the swap "succeeded" — real $2 spent for
+// a fraction of a cent of tokens, recorded as a $30 billion entry price.
+// This compares the fresh on-chain quote against the recent DexScreener
+// price directly and refuses to buy if they've diverged by more than 20x,
+// rather than trusting slippage tolerance to catch a baseline that's
+// already broken.
+const MAX_QUOTE_DIVERGENCE_FACTOR = 20;
+
+function assertQuoteIsSane({ expectedOutRaw, decimals, nativeAmount, nativeUsdPrice, pair }) {
+  if (!pair?.priceUsd) return; // no reference price to compare against — nothing to check
+  const expectedOutHuman = Number(expectedOutRaw) / 10 ** Number(decimals);
+  if (expectedOutHuman <= 0) throw new Error("On-chain quote returned zero tokens — pool is drained, aborting buy");
+  const usdValue = nativeAmount * nativeUsdPrice;
+  const impliedPriceUsd = usdValue / expectedOutHuman;
+  if (impliedPriceUsd > pair.priceUsd * MAX_QUOTE_DIVERGENCE_FACTOR) {
+    throw new Error(
+      `On-chain quote implies a price ${(impliedPriceUsd / pair.priceUsd).toFixed(0)}x above the recent market price — pool likely drained since the last check, aborting buy`
+    );
+  }
+}
+
 async function executeBuy(chain, tokenAddress, nativeAmount, nativeUsdPrice, slippageBps, pair, dexPair) {
   const wallet = requireWallet(chain);
   const nativeAmountWei = parseEther(nativeAmount.toFixed(18));
   const token = new Contract(tokenAddress, ERC20_ABI, wallet.provider);
   const balBefore = await token.balanceOf(wallet.address);
+  const decimals = await token.decimals();
 
   const v3Pool = await findV3Pool(chain, dexPair);
   let receipt;
@@ -198,11 +225,11 @@ async function executeBuy(chain, tokenAddress, nativeAmount, nativeUsdPrice, sli
     } else {
       // No verified quoter for this chain — fall back to DexScreener's live
       // spot price (the same price source this bot already trusts elsewhere).
-      const decimals = await token.decimals();
       const usdValue = nativeAmount * nativeUsdPrice;
       const expectedTokenAmountHuman = usdValue / pair.priceUsd;
       expectedOutRaw = BigInt(Math.floor(expectedTokenAmountHuman * 10 ** Number(decimals)));
     }
+    assertQuoteIsSane({ expectedOutRaw, decimals, nativeAmount, nativeUsdPrice, pair });
     const minOut = (expectedOutRaw * BigInt(10000 - slippageBps)) / 10000n;
 
     const tx = await router.exactInputSingle(
@@ -229,6 +256,7 @@ async function executeBuy(chain, tokenAddress, nativeAmount, nativeUsdPrice, sli
 
     const amountsOut = await router.getAmountsOut(nativeAmountWei, path);
     const expectedOut = amountsOut[amountsOut.length - 1];
+    assertQuoteIsSane({ expectedOutRaw: expectedOut, decimals, nativeAmount, nativeUsdPrice, pair });
     const minOut = (expectedOut * BigInt(10000 - slippageBps)) / 10000n;
 
     const tx = await router.swapExactETHForTokensSupportingFeeOnTransferTokens(
@@ -246,7 +274,6 @@ async function executeBuy(chain, tokenAddress, nativeAmount, nativeUsdPrice, sli
   const tokenAmountRaw = balAfter - balBefore;
   if (tokenAmountRaw <= 0n) throw new Error(`Buy tx confirmed but no tokens received: ${receipt.hash}`);
 
-  const decimals = await token.decimals();
   const tokenAmountHuman = Number(tokenAmountRaw) / 10 ** Number(decimals);
   const gasUsd = Number(formatEther(receipt.gasUsed * receipt.gasPrice)) * nativeUsdPrice;
   const usdSpent = nativeAmount * nativeUsdPrice;
