@@ -26,6 +26,7 @@ import {
   openRealTrade,
   recordBotUser,
   countBotUsers,
+  getRecentCalls,
 } from "../store/db.js";
 import { buildDigestEntries } from "../watchlist.js";
 import { loadDigestSettings, saveDigestSettings } from "../digestSettings.js";
@@ -934,6 +935,21 @@ export function createBot(stats, chainControls, digestControls) {
     await safeEdit(ctx, `📊 *Bot Stats*\n\nUsers who've interacted with this bot: *${count}*`, backKeyboard());
   });
 
+  // No dedicated price oracle — derives a chain's native/USD rate from a
+  // recently-called token's live pair (freshly fetched, not the stale
+  // call-time snapshot). Tries several recent calls, not just the latest —
+  // on this chain the single most recent call is itself quite likely to
+  // already be a dead/delisted pair by the time anyone looks.
+  async function getChainNativeUsdPrice(chain) {
+    const candidates = getRecentCalls(chain.key, 10);
+    for (const call of candidates) {
+      const dexPair = await getBestPair(chain.dexscreenerChainId, call.token_address).catch(() => null);
+      const pair = pairSummary(dexPair, call.token_address);
+      if (pair?.nativeUsdPrice) return pair.nativeUsdPrice;
+    }
+    return null;
+  }
+
   async function renderWalletBalance(ctx) {
     const walletAddress = getWalletAddress();
     if (!walletAddress) {
@@ -942,14 +958,31 @@ export function createBot(stats, chainControls, digestControls) {
     const balances = await Promise.all(
       Object.entries(CHAINS).map(async ([key, def]) => {
         const chain = { key, ...def };
-        const bal = await getNativeBalance(chain).catch(() => null);
-        return { label: def.label, balance: bal, symbol: def.nativeSymbol };
+        const [bal, nativeUsdPrice] = await Promise.all([
+          getNativeBalance(chain).catch(() => null),
+          getChainNativeUsdPrice(chain).catch(() => null),
+        ]);
+        return {
+          label: def.label,
+          balance: bal,
+          symbol: def.nativeSymbol,
+          usdValue: bal != null && nativeUsdPrice ? bal * nativeUsdPrice : null,
+        };
       })
     );
     const lines = [`💳 *Wallet Balance*`, "", `\`${walletAddress}\``, ""];
+    let totalUsd = 0;
+    let hasAnyUsd = false;
     for (const b of balances) {
-      lines.push(`${b.label}: ${b.balance != null ? `${b.balance.toFixed(6)} ${b.symbol}` : "n/a"}`);
+      const nativePart = b.balance != null ? `${b.balance.toFixed(6)} ${b.symbol}` : "n/a";
+      const usdPart = b.usdValue != null ? ` (${fmtUsd(b.usdValue)})` : "";
+      if (b.usdValue != null) {
+        totalUsd += b.usdValue;
+        hasAnyUsd = true;
+      }
+      lines.push(`${b.label}: ${nativePart}${usdPart}`);
     }
+    if (hasAnyUsd) lines.push("", `Total: ${fmtUsd(totalUsd)}`);
     const keyboard = Markup.inlineKeyboard([
       [Markup.button.callback("🔄 Refresh", "menu:walletbalance")],
       [Markup.button.callback("🔙 Menu", "menu:home")],

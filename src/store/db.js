@@ -239,6 +239,17 @@ export function getActiveCalls() {
   return db.prepare("SELECT * FROM called_tokens WHERE active = 1").all();
 }
 
+// Used as a live price-discovery anchor (e.g. deriving a chain's native/USD
+// rate for the wallet balance view) — any recently-called token's pair has
+// a fresh nativeUsdPrice, so this avoids hardcoding a specific reference
+// token that could itself die. Returns several candidates, not just the
+// single most recent one, since on this chain the single most recent call
+// is itself quite likely to already be a dead/delisted pair by the time
+// anyone looks — callers should try each until one resolves.
+export function getRecentCalls(chain, limit = 10) {
+  return db.prepare("SELECT * FROM called_tokens WHERE chain = ? ORDER BY called_at DESC LIMIT ?").all(chain, limit);
+}
+
 // Call-time volume/liquidity/mcap snapshot for a token — used by Super
 // Comando to gate which take-profit crossings it's willing to let ride.
 // Backtesting 380 historical calls found call-time 24h volume is the
