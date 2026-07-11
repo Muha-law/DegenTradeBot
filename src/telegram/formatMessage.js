@@ -3,7 +3,13 @@ const explorerUrls = {
   base: (addr) => `https://basescan.org/token/${addr}`,
   bsc: (addr) => `https://bscscan.com/token/${addr}`,
   arbitrum: (addr) => `https://arbiscan.io/token/${addr}`,
+  // Robinhood Chain's official explorer — Blockscout-powered, confirmed live.
+  robinhood: (addr) => `https://robinhoodchain.blockscout.com/address/${addr}`,
 };
+
+export function explorerUrlFor(chainKey, addr) {
+  return explorerUrls[chainKey]?.(addr) || null;
+}
 
 const gradeEmoji = { A: "🟢", B: "🟩", C: "🟡", D: "🟠", F: "🔴" };
 
@@ -28,6 +34,31 @@ export function fmtPrice(n) {
   if (!n || !Number.isFinite(n) || n > 1e12) return "n/a"; // guards against bad historical data
   if (n < 0.0001) return n.toExponential(2);
   return n.toFixed(6);
+}
+
+const SUBSCRIPT_DIGITS = ["₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉"];
+function toSubscript(n) {
+  return String(n)
+    .split("")
+    .map((d) => SUBSCRIPT_DIGITS[Number(d)])
+    .join("");
+}
+
+// Bonk-Bot-style tiny-price display: $0.0₄339 for 0.0000339 — compresses a
+// long run of leading zeros into a subscript count instead of forcing the
+// reader to count digits or parse exponential notation.
+export function fmtPriceCompact(n) {
+  if (!n || !Number.isFinite(n) || n <= 0 || n > 1e12) return "n/a";
+  if (n >= 1) return `$${n.toFixed(2)}`;
+  if (n >= 0.01) return `$${n.toFixed(4)}`;
+
+  const str = n.toFixed(18);
+  const afterDecimal = str.split(".")[1] || "";
+  let zeroCount = 0;
+  while (afterDecimal[zeroCount] === "0") zeroCount++;
+  const sigDigits = afterDecimal.slice(zeroCount, zeroCount + 3);
+  if (zeroCount < 2) return `$0.${afterDecimal.slice(0, zeroCount + 3)}`;
+  return `$0.0${toSubscript(zeroCount)}${sigDigits}`;
 }
 
 function fireEmoji(multiplier) {

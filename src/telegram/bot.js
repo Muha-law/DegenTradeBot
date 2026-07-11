@@ -34,6 +34,7 @@ import { loadPaperTradingSettings, savePaperTradingSettings } from "../paperTrad
 import { loadRealTradingSettings, saveRealTradingSettings } from "../realTradingSettings.js";
 import { hasWallet, getWalletAddress, getNativeBalance } from "../wallet.js";
 import { sellToken, buyTokenWithNativeAmount } from "../execution/swapExecutor.js";
+import { estimateV2PriceImpact } from "../risk/priceImpact.js";
 import {
   buildCallMessage,
   buildWatchlistDigest,
@@ -42,6 +43,8 @@ import {
   buildRealTradingSummary,
   fmtUsd,
   fmtPrice,
+  fmtPriceCompact,
+  explorerUrlFor,
   escapeMd,
   WATCHLIST_PAGE_SIZE,
 } from "./formatMessage.js";
@@ -620,6 +623,11 @@ async function handleTrack(ctx, chainKey, tokenAddress) {
 // manualTradeContext for this chat — current price/MC/liquidity, plus an
 // open-position summary if one exists. Used both on first load and every
 // subsequent refresh (after a buy/sell, or the Refresh button).
+function fmtPct(n) {
+  if (n == null || !Number.isFinite(n)) return "n/a";
+  return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
+}
+
 async function renderManualTradeTerminal(ctx) {
   const context = manualTradeContext.get(ctx.chat.id);
   if (!context) {
@@ -635,23 +643,47 @@ async function renderManualTradeTerminal(ctx) {
   }
   manualTradeContext.set(ctx.chat.id, { ...context, symbol: pair.symbol, name: pair.name });
 
-  const openPosition = getOpenRealTradeByToken(chainKey, tokenAddress);
+  const defaultBuyAmount = MANUAL_BUY_PRESETS[0];
+  // Tries the V2 reserve-based estimate regardless of what DexScreener calls
+  // the dex ("uniswap" for both v2 and v3 pools here, not a reliable
+  // discriminator) — it fails closed (returns null) if the pair contract
+  // isn't actually a V2-shaped pair, so this is safe to attempt unconditionally.
+  const [walletBalance, priceImpactPct] = await Promise.all([
+    hasWallet() ? getNativeBalance(chain).catch(() => null) : null,
+    estimateV2PriceImpact(chain, pair.pairAddress, chainDef.wrappedNative, defaultBuyAmount),
+  ]);
+
+  const explorerUrl = explorerUrlFor(chainKey, tokenAddress);
+  const chartUrl = pair.pairUrl;
+  const linkParts = [explorerUrl ? `[Explorer](${explorerUrl})` : null, chartUrl ? `[Chart](${chartUrl})` : null].filter(Boolean);
+
   const lines = [
-    `🎯 *Manual Trade* — ${escapeMd(pair.name) || "Unknown"} (${escapeMd(pair.symbol) || "?"}) on ${chain.label}`,
-    "",
-    `Price: $${fmtPrice(pair.priceUsd)}`,
-    `Market cap: ${fmtUsd(pair.marketCapUsd)}`,
-    `Liquidity: ${fmtUsd(pair.liquidityUsd)}`,
+    `🎯 ${escapeMd(pair.name) || "Unknown"} (${escapeMd(pair.symbol) || "?"}) on ${chain.label}`,
+    `\`${tokenAddress}\``,
   ];
+  if (linkParts.length) lines.push(linkParts.join(" | "));
+  lines.push(
+    "",
+    `Price: ${fmtPriceCompact(pair.priceUsd)}`,
+    `5m: ${fmtPct(pair.priceChange5m)}  1h: ${fmtPct(pair.priceChange1h)}  6h: ${fmtPct(pair.priceChange6h)}  24h: ${fmtPct(pair.priceChange24h)}`,
+    `Market Cap: ${fmtUsd(pair.marketCapUsd)}`,
+    `Liquidity: ${fmtUsd(pair.liquidityUsd)}`
+  );
+  if (priceImpactPct != null) {
+    lines.push("", `Price Impact (${defaultBuyAmount} ${chainDef.nativeSymbol}): ${priceImpactPct.toFixed(2)}%`);
+  }
+  lines.push("", `Wallet Balance: ${walletBalance != null ? `${walletBalance.toFixed(4)} ${chainDef.nativeSymbol}` : "n/a"}`);
+
+  const openPosition = getOpenRealTradeByToken(chainKey, tokenAddress);
   if (openPosition) {
     const pnlPct = ((pair.priceUsd - openPosition.entry_price_usd) / openPosition.entry_price_usd) * 100;
     lines.push(
       "",
       `Open position: ${fmtUsd(openPosition.position_size_usd)} | ${pnlPct >= 0 ? "🟢+" : "🔴"}${pnlPct.toFixed(1)}%`,
-      `Entry: $${fmtPrice(openPosition.entry_price_usd)}`
+      `Entry: ${fmtPriceCompact(openPosition.entry_price_usd)}`
     );
   }
-  lines.push("", `\`${tokenAddress}\``);
+  lines.push("", "To buy press one of the buttons below:");
 
   const text = lines.join("\n");
   const keyboard = manualTradeKeyboard(Boolean(openPosition));

@@ -60,6 +60,9 @@ export function pairSummary(pair, tokenAddress) {
     // quote side, leave it 0 and let the caller derive it from total supply.
     marketCapUsd: isBaseToken ? pair.marketCap || pair.fdv || 0 : 0,
     volume24h: pair.volume?.h24 || 0,
+    priceChange5m: pair.priceChange?.m5 ?? null,
+    priceChange1h: pair.priceChange?.h1 ?? null,
+    priceChange6h: pair.priceChange?.h6 ?? null,
     priceChange24h: pair.priceChange?.h24 ?? null,
     pairUrl: pair.url,
     pairAddress: pair.pairAddress,
