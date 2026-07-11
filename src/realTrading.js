@@ -40,6 +40,16 @@ function isSanePrice(n) {
   return typeof n === "number" && Number.isFinite(n) && n > 0 && n < 1e12;
 }
 
+// See the matching constant/comment in paperTrading.js — a near-empty pool's
+// reserve-ratio price can look "sane" by magnitude alone while backed by a
+// few cents of real liquidity. For real trades the actual dollar PnL is
+// still protected (it's computed from real swap proceeds, not this price),
+// but the exit *decision* (take-profit/stop-loss/Super Comando comparisons
+// below) and the recorded exitPriceUsd both use pair.priceUsd directly, so
+// a corrupted price could still trigger a bogus early exit or an AI check
+// fed nonsense data.
+const MIN_REALIZABLE_LIQUIDITY_USD = 25;
+
 // See the matching function in paperTrading.js — same backtested gate,
 // applied identically to real trades.
 function qualifiesForComando(trade, settings) {
@@ -203,7 +213,8 @@ export function startRealTradeChecker(bot) {
       try {
         const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
         const pair = pairSummary(dexPair, t.token_address);
-        if (!pair || !isSanePrice(pair.priceUsd)) {
+        const liquidityDust = pair && (!pair.liquidityUsd || pair.liquidityUsd < MIN_REALIZABLE_LIQUIDITY_USD);
+        if (!pair || !isSanePrice(pair.priceUsd) || liquidityDust) {
           const staleMinutes = t.price_unavailable_since ? (Date.now() - t.price_unavailable_since) / 60000 : 0;
           if (t.price_unavailable_since && staleMinutes >= STALE_PRICE_EXIT_MINUTES) {
             // Sustained unreadable price — most likely a drained/dead pool.

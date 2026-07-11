@@ -41,6 +41,15 @@ function isSanePrice(n) {
   return typeof n === "number" && Number.isFinite(n) && n > 0 && n < 1e12;
 }
 
+// A near-empty pool's reserve-ratio price can blow up to something that
+// looks "sane" by magnitude alone (e.g. $4M) while backed by a few cents of
+// real liquidity — confirmed live: CatKing and cryptotime both exited via
+// Super Comando's AI at a corrupted multi-million-dollar price, recording a
+// nonsense multi-quadrillion-dollar pnl_usd that poisoned the aggregate
+// stats. isSanePrice alone doesn't catch this since it only checks
+// magnitude, not whether the price is backed by anything real.
+const MIN_REALIZABLE_LIQUIDITY_USD = 25;
+
 // Gates Super Comando activation to tokens whose call-time volume matched
 // the backtested "genuine mover" signature (see superComandoMaxCallVolumeUsd
 // in paperTradingSettings.js) — "sniffing out the surest mooners" rather
@@ -121,7 +130,8 @@ export function startPaperTradeChecker(bot) {
       try {
         const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
         const pair = pairSummary(dexPair, t.token_address);
-        if (!pair || !isSanePrice(pair.priceUsd)) {
+        const liquidityDust = pair && (!pair.liquidityUsd || pair.liquidityUsd < MIN_REALIZABLE_LIQUIDITY_USD);
+        if (!pair || !isSanePrice(pair.priceUsd) || liquidityDust) {
           const staleMinutes = t.price_unavailable_since ? (Date.now() - t.price_unavailable_since) / 60000 : 0;
           if (t.price_unavailable_since && staleMinutes >= STALE_PRICE_EXIT_MINUTES) {
             // Sustained unreadable price — most likely a drained/dead pool.
