@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "totalBudgetUsd": 15,
+  "totalBudgetUsd": 10,
   "positionSizeUsd": 1,
   "takeProfitPct": 100,
   "stopLossPct": -50,

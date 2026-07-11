@@ -7,12 +7,22 @@ function isSanePrice(n) {
   return typeof n === "number" && Number.isFinite(n) && n > 0 && n < 1e12;
 }
 
+// A near-empty pool's spot price (reserve ratio) can blow up to something
+// that looks perfectly "sane" in magnitude (e.g. $8,395) while backed by
+// literally a few cents of real liquidity — the price is mathematically
+// real but not realizable by anyone trying to actually sell into it.
+// Without this, a fully-rugged pool reads as a "10000%+" milestone instead
+// of the dead pool it actually is. $25 is a low bar — only catches pools
+// that are genuinely down to dust, not just below the calling threshold.
+const MIN_REALIZABLE_LIQUIDITY_USD = 25;
+
 export async function fetchCallPct(call) {
   const chainDef = CHAINS[call.chain];
   if (!chainDef || !isSanePrice(call.call_price_usd)) return null;
   const dexPair = await getBestPair(chainDef.dexscreenerChainId, call.token_address);
   const pair = pairSummary(dexPair, call.token_address);
   if (!pair || !isSanePrice(pair.priceUsd)) return null;
+  if (!pair.liquidityUsd || pair.liquidityUsd < MIN_REALIZABLE_LIQUIDITY_USD) return null;
   return { pair, pct: ((pair.priceUsd - call.call_price_usd) / call.call_price_usd) * 100 };
 }
 

@@ -15,6 +15,15 @@ import { buildMilestoneMessage, buildTrackAlertMessage } from "./telegram/format
 const MILESTONES = [50, 100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 3000, 5000, 10000];
 const TRACK_CRON = "*/2 * * * *"; // every 2 minutes
 
+// A near-empty pool's reserve-ratio price can blow up to something that
+// looks like a sane number (e.g. $8,395) while backed by a few cents of
+// real liquidity — mathematically real, not realizable by anyone actually
+// trying to sell into it. Without this, a fully-rugged pool can read as a
+// "10000%+" milestone instead of the dead pool it actually is, since the
+// pct-based dead-detection below only catches pools that show as deeply
+// negative, not ones whose ratio blew up positive instead.
+const MIN_REALIZABLE_LIQUIDITY_USD = 25;
+
 // User-requested milestone tracking (/track), independent of the bot's own
 // auto-calls: alerts at +50%, +100%, +200%... and on a 50%/90% drawdown.
 export function startTrackUpdater(bot) {
@@ -56,8 +65,9 @@ async function runTrackUpdate(bot) {
       }
 
       const pct = ((pair.priceUsd - t.track_price_usd) / t.track_price_usd) * 100;
+      const liquidityDust = !pair.liquidityUsd || pair.liquidityUsd < MIN_REALIZABLE_LIQUIDITY_USD;
 
-      if (pct <= -90 && !t.dead_alert_sent) {
+      if ((pct <= -90 || liquidityDust) && !t.dead_alert_sent) {
         await postUpdate(
           bot,
           buildTrackAlertMessage({
