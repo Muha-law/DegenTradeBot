@@ -320,7 +320,7 @@ function mainMenuKeyboard() {
     [Markup.button.callback("🗑 Untrack Token", "menu:untrack"), Markup.button.callback("⛓ Chains", "menu:chains")],
     [Markup.button.callback("📈 Paper Trading", "menu:papertrading")],
     [Markup.button.callback("💰 Real Funds Trading", "menu:realtrading")],
-    [Markup.button.callback("📊 Bot Stats", "menu:botstats")],
+    [Markup.button.callback("💳 Wallet Balance", "menu:walletbalance"), Markup.button.callback("📊 Bot Stats", "menu:botstats")],
   ]);
 }
 
@@ -932,6 +932,34 @@ export function createBot(stats, chainControls, digestControls) {
     await ctx.answerCbQuery();
     const count = countBotUsers();
     await safeEdit(ctx, `📊 *Bot Stats*\n\nUsers who've interacted with this bot: *${count}*`, backKeyboard());
+  });
+
+  async function renderWalletBalance(ctx) {
+    const walletAddress = getWalletAddress();
+    if (!walletAddress) {
+      return safeEdit(ctx, "💳 *Wallet Balance*\n\nNo wallet configured — set WALLET_PRIVATE_KEY in .env to enable real-fund trading.", backKeyboard());
+    }
+    const balances = await Promise.all(
+      Object.entries(CHAINS).map(async ([key, def]) => {
+        const chain = { key, ...def };
+        const bal = await getNativeBalance(chain).catch(() => null);
+        return { label: def.label, balance: bal, symbol: def.nativeSymbol };
+      })
+    );
+    const lines = [`💳 *Wallet Balance*`, "", `\`${walletAddress}\``, ""];
+    for (const b of balances) {
+      lines.push(`${b.label}: ${b.balance != null ? `${b.balance.toFixed(6)} ${b.symbol}` : "n/a"}`);
+    }
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback("🔄 Refresh", "menu:walletbalance")],
+      [Markup.button.callback("🔙 Menu", "menu:home")],
+    ]);
+    await safeEdit(ctx, lines.join("\n"), keyboard);
+  }
+
+  bot.action("menu:walletbalance", async (ctx) => {
+    await ctx.answerCbQuery();
+    await renderWalletBalance(ctx);
   });
 
   bot.action("menu:home", async (ctx) => {
