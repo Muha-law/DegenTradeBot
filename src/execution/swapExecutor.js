@@ -55,6 +55,40 @@ const ABSOLUTE_MAX_NATIVE_PER_MANUAL_TRADE = 0.05;
 
 const DEADLINE_SECONDS = 120;
 
+// A HOODBOT-style buy reverted on-chain because the price moved between
+// quoting and the transaction actually landing — the estimate-gas step
+// passed, meaning it wasn't going to fail at the moment it was checked.
+// Retrying the identical transaction would just fail the same way again;
+// retrying with more slippage tolerance gives it room to succeed against a
+// price that's since moved further. Ladder stays within 5–10% regardless of
+// what's configured above 1000bps, and never exceeds the caller's own
+// configured ceiling if that's lower.
+const SLIPPAGE_RETRY_LADDER_BPS = [500, 750, 1000];
+
+// Runs `attempt(slippageBps)` against an escalating slippage ladder (capped
+// at maxBps) until one succeeds, retrying only on an actual failure — not a
+// blanket retry-anything wrapper, so callers should still let genuinely
+// non-retryable errors (e.g. no wallet configured) surface normally, since
+// those will just fail identically on every rung and only waste time.
+export async function withSlippageRetry(attempt, maxBps) {
+  const ladder = SLIPPAGE_RETRY_LADDER_BPS.filter((bps) => bps <= maxBps);
+  if (ladder.length === 0) ladder.push(maxBps);
+  else if (ladder[ladder.length - 1] < maxBps) ladder.push(maxBps);
+
+  let lastErr;
+  for (let i = 0; i < ladder.length; i++) {
+    try {
+      const result = await attempt(ladder[i]);
+      if (i > 0) console.log(`[slippageRetry] succeeded on attempt ${i + 1}/${ladder.length} at ${ladder[i] / 100}% slippage`);
+      return result;
+    } catch (err) {
+      lastErr = err;
+      console.error(`[slippageRetry] attempt ${i + 1}/${ladder.length} (${ladder[i] / 100}% slippage) failed: ${err.message}`);
+    }
+  }
+  throw lastErr;
+}
+
 function requireWallet(chain) {
   const wallet = getWalletForChain(chain);
   if (!wallet) throw new Error("No wallet configured (WALLET_PRIVATE_KEY unset)");

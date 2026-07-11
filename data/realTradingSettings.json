@@ -4,7 +4,7 @@
   "positionSizeUsd": 1,
   "takeProfitPct": 100,
   "stopLossPct": -50,
-  "slippageBps": 500,
+  "slippageBps": 1000,
   "superComandoEnabled": true,
   "superComandoMaxCallVolumeUsd": 18000
 }

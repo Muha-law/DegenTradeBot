@@ -5,7 +5,7 @@ import { loadRealTradingSettings } from "./realTradingSettings.js";
 import { getBestPair, pairSummary } from "./risk/dexscreener.js";
 import { checkFreshLiquidity } from "./filters/filter.js";
 import { shouldExitMooner } from "./ai/superComando.js";
-import { buyToken, sellToken, verifySellable } from "./execution/swapExecutor.js";
+import { buyToken, sellToken, verifySellable, withSlippageRetry } from "./execution/swapExecutor.js";
 import { hasWallet } from "./wallet.js";
 import {
   openRealTrade,
@@ -80,9 +80,9 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, na
 
   let result;
   try {
-    result = await buyToken(chain, tokenAddress, settings.positionSizeUsd, settings.slippageBps);
+    result = await withSlippageRetry((bps) => buyToken(chain, tokenAddress, settings.positionSizeUsd, bps), settings.slippageBps);
   } catch (err) {
-    console.error(`[realTrading] BUY FAILED for ${symbol} (${chain.key}):`, err.message);
+    console.error(`[realTrading] BUY FAILED for ${symbol} (${chain.key}) after slippage retries:`, err.message);
     await postUpdate(bot, buildRealTradeFailedMessage({ chain, tokenAddress, name, symbol, reason: err.message }));
     return;
   }
@@ -128,6 +128,11 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, na
       })
     );
     try {
+      // Deliberately not using withSlippageRetry here — verifySellable just
+      // predicted this exact sell would fail because the token's own
+      // transfer logic rejects it (blacklist/pause/disabled trading), not
+      // because of price movement. More slippage tolerance can't fix that;
+      // retrying would just burn time re-failing the same way.
       const sellResult = await sellToken(chain, tokenAddress, result.tokenAmountRaw, settings.slippageBps);
       const pnlUsd = sellResult.proceedsUsd - settings.positionSizeUsd - result.gasUsd - sellResult.gasUsd;
       const pnlPct = (pnlUsd / settings.positionSizeUsd) * 100;
@@ -212,9 +217,9 @@ export function startRealTradeChecker(bot) {
             console.error(`[realTrading] ${t.symbol} (${t.chain}) price unavailable for ${staleMinutes.toFixed(0)}m — forcing sell attempt`);
             let sellResult;
             try {
-              sellResult = await sellToken(chain, t.token_address, t.token_amount_raw, settings.slippageBps);
+              sellResult = await withSlippageRetry((bps) => sellToken(chain, t.token_address, t.token_amount_raw, bps), settings.slippageBps);
             } catch (err) {
-              console.error(`[realTrading] stale-price forced sell failed for ${t.symbol} (${t.chain}):`, err.message);
+              console.error(`[realTrading] stale-price forced sell failed for ${t.symbol} (${t.chain}) after slippage retries:`, err.message);
               touchRealTradeStalePrice(t.id);
               continue;
             }
@@ -292,12 +297,13 @@ export function startRealTradeChecker(bot) {
         if (exitReason) {
           let sellResult;
           try {
-            sellResult = await sellToken(chain, t.token_address, t.token_amount_raw, settings.slippageBps);
+            sellResult = await withSlippageRetry((bps) => sellToken(chain, t.token_address, t.token_amount_raw, bps), settings.slippageBps);
           } catch (err) {
-            // Sell reverted or failed — position is still genuinely open
-            // on-chain. Leave it open and retry next cycle rather than
-            // mark it closed on a transaction that never happened.
-            console.error(`[realTrading] SELL FAILED for ${t.symbol} (${t.chain}), exitReason=${exitReason}:`, err.message);
+            // Sell reverted or failed even across the slippage ladder —
+            // position is still genuinely open on-chain. Leave it open and
+            // retry next cycle rather than mark it closed on a transaction
+            // that never happened.
+            console.error(`[realTrading] SELL FAILED for ${t.symbol} (${t.chain}), exitReason=${exitReason}, after slippage retries:`, err.message);
             touchRealTrade(t.id);
             continue;
           }

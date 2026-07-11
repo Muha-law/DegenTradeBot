@@ -34,7 +34,7 @@ import { loadPresets, applyPreset } from "../presets.js";
 import { loadPaperTradingSettings, savePaperTradingSettings } from "../paperTradingSettings.js";
 import { loadRealTradingSettings, saveRealTradingSettings } from "../realTradingSettings.js";
 import { hasWallet, getWalletAddress, getNativeBalance } from "../wallet.js";
-import { sellToken, buyTokenWithNativeAmount } from "../execution/swapExecutor.js";
+import { sellToken, buyTokenWithNativeAmount, withSlippageRetry } from "../execution/swapExecutor.js";
 import { estimateV2PriceImpact } from "../risk/priceImpact.js";
 import {
   buildCallMessage,
@@ -214,7 +214,7 @@ async function closeAllOpenRealTrades(settings) {
       const pair = pairSummary(dexPair, t.token_address);
       const exitPriceUsd = pair && isSanePrice(pair.priceUsd) ? pair.priceUsd : t.entry_price_usd;
 
-      const sellResult = await sellToken(chain, t.token_address, t.token_amount_raw, settings.slippageBps);
+      const sellResult = await withSlippageRetry((bps) => sellToken(chain, t.token_address, t.token_amount_raw, bps), settings.slippageBps);
       const pnlUsd = sellResult.proceedsUsd - t.position_size_usd - t.entry_gas_usd - sellResult.gasUsd;
       const pnlPct = (pnlUsd / t.position_size_usd) * 100;
       closeRealTrade(t.id, {
@@ -702,7 +702,7 @@ async function executeManualBuy(ctx, context, nativeAmount) {
   }
   const settings = loadRealTradingSettings();
   try {
-    const result = await buyTokenWithNativeAmount(chain, tokenAddress, nativeAmount, settings.slippageBps);
+    const result = await withSlippageRetry((bps) => buyTokenWithNativeAmount(chain, tokenAddress, nativeAmount, bps), settings.slippageBps);
     const existing = getOpenRealTradeByToken(chainKey, tokenAddress);
     if (existing) {
       // Adding to an existing position — blend entry price by USD-weighted
@@ -759,7 +759,7 @@ async function executeManualSell(ctx, context, pct) {
     const pair = pairSummary(dexPair, tokenAddress);
     const exitPriceUsd = pair?.priceUsd || position.entry_price_usd;
 
-    const sellResult = await sellToken(chain, tokenAddress, sellRaw.toString(), settings.slippageBps);
+    const sellResult = await withSlippageRetry((bps) => sellToken(chain, tokenAddress, sellRaw.toString(), bps), settings.slippageBps);
     const soldFractionUsd = position.position_size_usd * (pct / 100);
     const gasShare = pct === 100 ? position.entry_gas_usd : position.entry_gas_usd * (pct / 100);
     const pnlUsd = sellResult.proceedsUsd - soldFractionUsd - gasShare - sellResult.gasUsd;
@@ -1430,7 +1430,7 @@ export function createBot(stats, chainControls, digestControls) {
         return safeEdit(ctx, `⚠️ Couldn't fetch a current price for ${escapeMd(t.symbol) || t.token_address} — left open.`, realActiveTradesKeyboard(getOpenRealTrades()));
       }
       const chain = { key: t.chain, ...chainDef };
-      const sellResult = await sellToken(chain, t.token_address, t.token_amount_raw, settings.slippageBps);
+      const sellResult = await withSlippageRetry((bps) => sellToken(chain, t.token_address, t.token_amount_raw, bps), settings.slippageBps);
       const pnlUsd = sellResult.proceedsUsd - t.position_size_usd - t.entry_gas_usd - sellResult.gasUsd;
       const pnlPct = (pnlUsd / t.position_size_usd) * 100;
       closeRealTrade(id, {
