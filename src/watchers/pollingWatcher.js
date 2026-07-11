@@ -3,6 +3,16 @@ import { hasSeenPair, markPairSeen } from "../store/db.js";
 
 const POLL_INTERVAL_MS = 5000;
 const MAX_BLOCK_RANGE = 1000; // per-request cap; also how far a single cycle catches up if behind
+// How far back to backfill on startup, instead of jumping straight to
+// "latest" and silently losing anything created during downtime. lastBlock
+// only ever lives in memory (never persisted), so every process restart —
+// and on Railway, every deploy is a restart, plus a chain toggle spins up a
+// brand new watcher instance — previously meant a permanent blind window.
+// 5000 blocks is generous relative to this chain's recent fast block rate
+// (minutes, not hours) without risking a slow chunk-by-chunk catch-up on a
+// genuinely fresh deploy; hasSeenPair() dedup makes re-scanning already-seen
+// pairs harmless if the real gap was smaller than this.
+const STARTUP_BACKFILL_BLOCKS = 5000;
 
 function topic0For(factory) {
   if (factory.topic0) return factory.topic0;
@@ -59,8 +69,9 @@ export function startPollingWatcher(chain, onNewToken) {
     try {
       const currentBlock = await provider.getBlockNumber();
       if (state.lastBlock === null) {
-        state.lastBlock = currentBlock; // don't backfill on startup, just start watching forward
-      } else if (currentBlock > state.lastBlock) {
+        state.lastBlock = Math.max(0, currentBlock - STARTUP_BACKFILL_BLOCKS);
+      }
+      if (currentBlock > state.lastBlock) {
         // Bounded catch-up: if we're behind by more than one chunk, only
         // advance one chunk this cycle instead of requesting the whole gap
         // in one (increasingly large, increasingly failure-prone) call.
