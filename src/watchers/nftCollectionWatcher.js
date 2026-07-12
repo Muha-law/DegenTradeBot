@@ -19,7 +19,7 @@ export function startNftCollectionWatcher(chain, onNewCollection) {
   async function poll() {
     if (stopped) return;
     try {
-      const collections = await listRecentCollections({ limit: 50 });
+      const collections = await listRecentCollections(chain.key, { limit: 50 });
       for (const c of collections) {
         if (!c.contractAddress) continue; // no on-chain contract yet (metadata-only draft) — nothing to score
         if (hasSeenNftCollection(chain.key, c.contractAddress)) continue;

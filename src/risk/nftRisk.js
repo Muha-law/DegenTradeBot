@@ -133,8 +133,11 @@ function gradeFor(score) {
 }
 
 // chain must carry goplusChainId/etherscanChainId like the token-side chain
-// objects (CHAINS.ethereum) — NFT support is Ethereum-only for now, but this
-// stays chain-parameterized the same way riskScore.js does.
+// objects — NFT support currently covers Base and Robinhood Chain (see
+// nftChains.js), fully chain-parameterized the same way riskScore.js is.
+// Note: GoPlus doesn't cover Robinhood Chain at all (confirmed in
+// riskScore.js's goplusUnsupported handling) — nft_security calls there
+// fail closed to null and this degrades to NO_DATA_FACTOR automatically.
 export async function computeNftRiskScore(chain, contractAddress) {
   const flags = [];
 

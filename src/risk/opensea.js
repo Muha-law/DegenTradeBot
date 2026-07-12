@@ -34,7 +34,10 @@ async function request(path, { method = "GET", params, body } = {}) {
 // OpenSea's chain slugs differ from this bot's own chain keys in general
 // (e.g. Base is "base" on both, but this mapping exists so the NFT modules
 // never assume they happen to match as the feature grows to more chains).
-const OPENSEA_CHAIN_SLUG = { ethereum: "ethereum" };
+// Robinhood Chain's slug ("robinhood") confirmed live at
+// opensea.io/discover/chain/robinhood — OpenSea announced support for it
+// directly (@opensea on X, "Robinhood Chain is now supported on OpenSea").
+const OPENSEA_CHAIN_SLUG = { ethereum: "ethereum", base: "base", robinhood: "robinhood" };
 
 export function openseaChainSlug(chainKey) {
   return OPENSEA_CHAIN_SLUG[chainKey] || chainKey;
@@ -84,16 +87,19 @@ export async function getCollectionStats(slug) {
   };
 }
 
-// Polling source for the new-collection watcher. OpenSea's `created_date`
+// Polling source for the new-collection watcher. Scoped server-side to one
+// chain via OpenSea's own `chain` filter (confirmed on
+// docs.opensea.io/reference/list_collections) — without it, "most recently
+// created collections" is global across every chain OpenSea indexes, and a
+// quiet chain like Robinhood could get crowded out of a 50-item window by
+// higher-volume chains OpenSea also tracks. OpenSea's `created_date` itself
 // reflects when OpenSea indexed the collection slug, not necessarily the
 // exact contract-deploy block — can lag or lead actual on-chain deployment
-// by a while. This is the accepted tradeoff for using a data source that
-// also gives us floor price / owner count / verification status, none of
-// which a pure on-chain deploy-watcher could provide on its own. Exact
-// query param name/shape should be reconfirmed against
-// docs.opensea.io/reference/list_collections at build/deploy time.
-export async function listRecentCollections({ limit = 50 } = {}) {
-  const body = await request("/collections", { params: { order_by: "created_date", limit } });
+// by a while. Accepted tradeoff for a data source that also gives us floor
+// price / owner count / verification status, none of which a pure on-chain
+// deploy-watcher could provide on its own.
+export async function listRecentCollections(chainKey, { limit = 50 } = {}) {
+  const body = await request("/collections", { params: { chain: openseaChainSlug(chainKey), order_by: "created_date", limit } });
   return (body.collections || []).map((c) => ({
     slug: c.collection,
     name: c.name || null,

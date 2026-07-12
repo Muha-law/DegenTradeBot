@@ -45,6 +45,8 @@ import { sellToken, buyTokenWithNativeAmount, withSlippageRetry } from "../execu
 import { estimateV2PriceImpact } from "../risk/priceImpact.js";
 import { renderOpenCard, renderCloseCard } from "./tradeCard.js";
 import { computeNftRiskScore } from "../risk/nftRisk.js";
+import { getContract } from "../risk/opensea.js";
+import { getNftChainKeys, getNftChainDefs } from "../nftChains.js";
 import { loadNftFilters, saveNftFilters } from "../filters/nftFilter.js";
 import { loadNftPaperTradingSettings, saveNftPaperTradingSettings } from "../nftPaperTradingSettings.js";
 import { loadNftRealTradingSettings, saveNftRealTradingSettings } from "../nftRealTradingSettings.js";
@@ -641,8 +643,28 @@ async function scoreAndReply(ctx, chainKey, tokenAddress) {
   await ctx.reply(message, { parse_mode: "Markdown", ...backKeyboard() });
 }
 
-async function scoreAndReplyNft(ctx, contractAddress) {
-  const chain = { key: "ethereum", ...CHAINS.ethereum };
+// Resolves which active NFT chain a pasted contract address belongs to —
+// same "try each configured chain" idea as the token side's detectChains,
+// just via OpenSea's own contract lookup instead of DexScreener search
+// (there's no NFT-equivalent multi-chain search endpoint to call once).
+async function detectNftChain(contractAddress) {
+  const chains = getNftChainDefs();
+  for (const chain of chains) {
+    const info = await getContract(chain.key, contractAddress).catch(() => null);
+    if (info?.slug) return chain;
+  }
+  return null;
+}
+
+async function scoreAndReplyNft(ctx, contractAddress, chainKeyHint) {
+  let chain;
+  if (chainKeyHint) {
+    if (!CHAINS[chainKeyHint]) throw new Error(`Unknown chain. Options: ${getNftChainKeys().join(", ")}`);
+    chain = { key: chainKeyHint, ...CHAINS[chainKeyHint] };
+  } else {
+    chain = await detectNftChain(contractAddress);
+    if (!chain) throw new Error(`Couldn't find this collection on any watched NFT chain (${getNftChainKeys().join(", ")}).`);
+  }
   const riskResult = await computeNftRiskScore(chain, contractAddress);
   const message = buildNftCallMessage({ chain, contractAddress, riskResult, source: "new_collection" });
   await ctx.reply(message, { parse_mode: "Markdown", ...backKeyboard() });
@@ -1702,9 +1724,10 @@ export function createBot(stats, chainControls, digestControls) {
   bot.action("menu:nft", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireOpensea(ctx)) return;
+    const chainLabels = getNftChainDefs().map((c) => c.label).join(", ") || "none configured";
     await safeEdit(
       ctx,
-      "🖼 *NFTs*\n\nNew-collection sniping + wallet copy-trading on Ethereum, via OpenSea. NFT exits list on the marketplace and wait for a buyer — not an instant swap like token trading.",
+      `🖼 *NFTs*\n\nNew-collection sniping + wallet copy-trading on ${chainLabels}, via OpenSea. NFT exits list on the marketplace and wait for a buyer — not an instant swap like token trading.`,
       nftMenuKeyboard()
     );
   });
@@ -1944,11 +1967,20 @@ export function createBot(stats, chainControls, digestControls) {
   bot.command("nftscore", async (ctx) => {
     if (!requireOpensea(ctx)) return ctx.reply("NFT features need OPENSEA_API_KEY set in .env.");
     const args = ctx.message.text.split(/\s+/).filter(Boolean).slice(1);
-    const contractAddress = args[0];
-    if (!contractAddress || !ADDRESS_RE.test(contractAddress)) return ctx.reply("Usage: /nftscore <contractAddress>");
+    const usage = `Usage: /nftscore <contractAddress> or /nftscore <chain> <contractAddress> (chains: ${getNftChainKeys().join(", ")})`;
+    let chainKeyHint, contractAddress;
+    if (args.length === 1) {
+      contractAddress = args[0];
+    } else if (args.length === 2) {
+      [chainKeyHint, contractAddress] = args;
+      chainKeyHint = chainKeyHint.toLowerCase();
+    } else {
+      return ctx.reply(usage);
+    }
+    if (!contractAddress || !ADDRESS_RE.test(contractAddress)) return ctx.reply(usage);
     await ctx.reply("Analyzing…");
     try {
-      await scoreAndReplyNft(ctx, contractAddress);
+      await scoreAndReplyNft(ctx, contractAddress, chainKeyHint);
     } catch (err) {
       ctx.reply(`Failed to score collection: ${err.message}`);
     }

@@ -18,6 +18,7 @@ import { evaluateNftCollection } from "./nftPipeline.js";
 import { startNftBuyRecheckQueue } from "./nftBuyRecheckQueue.js";
 import { startNftPaperTradeChecker } from "./nftPaperTrading.js";
 import { startNftRealTradeChecker } from "./nftRealTrading.js";
+import { getNftChainDefs } from "./nftChains.js";
 
 // Last line of defense: an async failure anywhere that isn't already
 // caught (a cron job's send call, a stray promise) otherwise crashes the
@@ -134,14 +135,19 @@ startTrackUpdater(bot);
 startPaperTradeChecker(bot);
 startRealTradeChecker(bot);
 
-// NFT support is Ethereum-only for now and lives entirely behind
-// OPENSEA_API_KEY being configured — with no key, none of this starts and
-// the rest of the bot behaves exactly as it did before this feature existed.
+// NFT support lives entirely behind OPENSEA_API_KEY being configured —
+// with no key, none of this starts and the rest of the bot behaves exactly
+// as it did before this feature existed. Which chains it watches (default
+// Base + Robinhood Chain, not Ethereum) comes from nftChains.js — one
+// collection watcher + one wallet watcher per chain; the pending-listing/
+// paper/real-trade checkers already key off each stored row's own `chain`
+// field via CHAINS[...], so they don't need per-chain wiring here.
 const nftWatcherStops = [];
 if (config.openseaApiKey) {
-  const nftChain = { key: "ethereum", ...CHAINS.ethereum };
-  nftWatcherStops.push(startNftCollectionWatcher(nftChain, handleNewNftCollection));
-  nftWatcherStops.push(startNftWalletWatcher(nftChain, handleWalletNftBuy));
+  for (const nftChain of getNftChainDefs()) {
+    nftWatcherStops.push(startNftCollectionWatcher(nftChain, handleNewNftCollection));
+    nftWatcherStops.push(startNftWalletWatcher(nftChain, handleWalletNftBuy));
+  }
   startNftBuyRecheckQueue(bot);
   startNftPaperTradeChecker(bot);
   startNftRealTradeChecker(bot);
