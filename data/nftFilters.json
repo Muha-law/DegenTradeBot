@@ -6,5 +6,6 @@
   "maxOwnerConcentrationPercent": 100,
   "requireSafelistedOrVerified": false,
   "blockMalicious": true,
-  "minRiskScore": 0
+  "minRiskScore": 0,
+  "minCopyTradeBuyEth": 0
 }

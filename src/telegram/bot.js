@@ -1924,6 +1924,23 @@ export function createBot(stats, chainControls, digestControls) {
     const removed = deactivateTrack(resolved.chainKey, resolved.tokenAddress);
     ctx.reply(removed ? "Stopped tracking." : "Wasn't tracking that token.");
   });
+  bot.command("nftfilter", (ctx) => {
+    if (!requireOpensea(ctx)) return ctx.reply("NFT features need OPENSEA_API_KEY set in .env.");
+    const filters = loadNftFilters();
+    ctx.reply("```\n" + JSON.stringify(filters, null, 2) + "\n```", { parse_mode: "Markdown", ...backKeyboard() });
+  });
+  bot.command("setnftfilter", (ctx) => {
+    if (!requireOpensea(ctx)) return ctx.reply("NFT features need OPENSEA_API_KEY set in .env.");
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    const [, key, rawValue] = ctx.message.text.split(/\s+/);
+    if (!key || rawValue === undefined) return ctx.reply("Usage: /setnftfilter <key> <value>");
+    const filters = loadNftFilters();
+    if (!(key in filters)) return ctx.reply(`Unknown filter key. Valid keys: ${Object.keys(filters).join(", ")}`);
+    const prev = filters[key];
+    filters[key] = typeof prev === "boolean" ? rawValue === "true" : Number(rawValue);
+    saveNftFilters(filters);
+    ctx.reply(`Updated ${key}: ${prev} → ${filters[key]}`);
+  });
   bot.command("nftscore", async (ctx) => {
     if (!requireOpensea(ctx)) return ctx.reply("NFT features need OPENSEA_API_KEY set in .env.");
     const args = ctx.message.text.split(/\s+/).filter(Boolean).slice(1);

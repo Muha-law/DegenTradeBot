@@ -34,22 +34,45 @@ export async function checkFreshFloorPrice(slug) {
 }
 
 // Decides whether a scored NFT collection gets "called". Returns { pass, reasons }.
-export function applyNftFilter(riskResult) {
+//
+// Unlike the token filter, this is source-aware: a `new_collection` call
+// fires the moment OpenSea indexes a freshly deployed collection, which
+// structurally means there's often no secondary-market activity yet (still
+// minting) — gating on floor price/volume there doesn't measure risk, it
+// just measures "hasn't started trading," and would silently block every
+// new-collection call forever the moment someone tightens minFloorPriceEth
+// above its 0 default. A `copy_trade` call, by contrast, only ever fires
+// because a listing existed and got bought, so a real market is already
+// there and those checks are meaningful. Ownership/verification/risk-score
+// checks come from mint/deploy-time data either way, so those stay
+// unconditional.
+export function applyNftFilter(riskResult, { source, triggerBuyPriceEth } = {}) {
   const filters = loadNftFilters();
   const reasons = [];
   const { security, stats, collection, totalSupply, score } = riskResult;
 
   if (score < filters.minRiskScore) reasons.push(`Risk score ${score} below minimum ${filters.minRiskScore}`);
 
-  const floor = stats?.floorPriceEth || 0;
-  if (floor < filters.minFloorPriceEth) reasons.push(`Floor price ${floor} ETH below minimum ${filters.minFloorPriceEth} ETH`);
-  if (filters.maxFloorPriceEth > 0 && floor > filters.maxFloorPriceEth) {
-    reasons.push(`Floor price ${floor} ETH above maximum ${filters.maxFloorPriceEth} ETH`);
+  if (source !== "new_collection") {
+    const floor = stats?.floorPriceEth || 0;
+    if (floor < filters.minFloorPriceEth) reasons.push(`Floor price ${floor} ETH below minimum ${filters.minFloorPriceEth} ETH`);
+    if (filters.maxFloorPriceEth > 0 && floor > filters.maxFloorPriceEth) {
+      reasons.push(`Floor price ${floor} ETH above maximum ${filters.maxFloorPriceEth} ETH`);
+    }
+
+    const vol24h = stats?.volume24hEth || 0;
+    if (filters.minVolume24hEth > 0 && vol24h < filters.minVolume24hEth) {
+      reasons.push(`24h volume ${vol24h} ETH below minimum ${filters.minVolume24hEth} ETH`);
+    }
   }
 
-  const vol24h = stats?.volume24hEth || 0;
-  if (filters.minVolume24hEth > 0 && vol24h < filters.minVolume24hEth) {
-    reasons.push(`24h volume ${vol24h} ETH below minimum ${filters.minVolume24hEth} ETH`);
+  // Copy-trade-specific quality gate — a wallet buying a near-zero-value
+  // item isn't much of a conviction signal. No token-side equivalent (yet):
+  // token calls only ever have one trigger source.
+  if (source === "copy_trade" && filters.minCopyTradeBuyEth > 0 && triggerBuyPriceEth != null) {
+    if (triggerBuyPriceEth < filters.minCopyTradeBuyEth) {
+      reasons.push(`Copy-trade buy-in ${triggerBuyPriceEth} ETH below minimum ${filters.minCopyTradeBuyEth} ETH — too small to treat as a signal`);
+    }
   }
 
   const numOwners = stats?.numOwners ?? 0;

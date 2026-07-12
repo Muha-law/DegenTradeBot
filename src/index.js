@@ -77,7 +77,12 @@ async function handleWalletNftBuy({ chain, walletAddress, contractAddress, price
   if (isPaused()) return;
   console.log(`[${chain.key}] watched wallet ${walletAddress} bought NFT ${contractAddress} for ${priceEth ?? "?"} ETH`);
   try {
-    const result = await evaluateNftCollection(bot, { chain, contractAddress, source: "copy_trade", triggerWallet: { address: walletAddress } });
+    const result = await evaluateNftCollection(bot, {
+      chain,
+      contractAddress,
+      source: "copy_trade",
+      triggerWallet: { address: walletAddress, buyPriceEth: priceEth },
+    });
     if (result.pass) {
       console.log(`[${chain.key}] called NFT ${result.name || "?"} (${contractAddress}) via copy signal — score ${result.riskResult.score}`);
     }
