@@ -122,10 +122,24 @@ export async function evaluateToken(bot, { chain, dexName, pairAddress, tokenAdd
   // Paper trading always runs alongside real trading (not replaced by it) —
   // it's the ongoing validation signal for the strategy regardless of
   // whether real funds are also in play.
-  await openPaperTradeIfRoom(bot, { chain, tokenAddress, symbol, name, priceUsd: riskResult.pair?.priceUsd });
+  await openPaperTradeIfRoom(bot, {
+    chain,
+    tokenAddress,
+    symbol,
+    name,
+    priceUsd: riskResult.pair?.priceUsd,
+    marketCapUsd: riskResult.pair?.marketCapUsd,
+  });
   // No-ops unless realTradingSettings.enabled is explicitly true and a
   // wallet is configured — see realTrading.js.
-  await openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, name, priceUsd: riskResult.pair?.priceUsd });
+  await openRealTradeIfRoom(bot, {
+    chain,
+    tokenAddress,
+    symbol,
+    name,
+    priceUsd: riskResult.pair?.priceUsd,
+    marketCapUsd: riskResult.pair?.marketCapUsd,
+  });
 
   return { pass: true, riskResult, name, symbol };
 }

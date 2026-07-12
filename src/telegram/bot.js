@@ -833,6 +833,11 @@ async function executeManualBuy(ctx, context, nativeAmount) {
   const settings = loadRealTradingSettings();
   try {
     const result = await withSlippageRetry((bps) => buyTokenWithNativeAmount(chain, tokenAddress, nativeAmount, bps), settings.slippageBps);
+    // Best-effort — buyTokenWithNativeAmount doesn't return market cap, and
+    // this is only for the card/DB snapshot, not the trade decision itself.
+    const marketCapUsd = await getBestPair(chainDef.dexscreenerChainId, tokenAddress)
+      .then((dexPair) => pairSummary(dexPair, tokenAddress)?.marketCapUsd ?? null)
+      .catch(() => null);
     const existing = getOpenRealTradeByToken(chainKey, tokenAddress);
     if (existing) {
       // Adding to an existing position — blend entry price by USD-weighted
@@ -857,15 +862,17 @@ async function executeManualBuy(ctx, context, nativeAmount) {
         nativeSpent: result.nativeSpent,
         entryTxHash: result.txHash,
         entryGasUsd: result.gasUsd,
+        entryMarketCapUsd: marketCapUsd,
       });
     }
     const caption = `✅ Bought ${nativeAmount} ${chainDef.nativeSymbol} (~${fmtUsd(result.usdSpent)}) — gas ${fmtUsd(result.gasUsd)}\nTx: \`${result.txHash}\``;
-    const imageBuffer = renderOpenCard({
+    const imageBuffer = await renderOpenCard({
       chainLabel: chainDef.label,
       symbol: context.symbol,
       name: context.name,
       tradeMode: "real",
       entryPriceUsd: result.entryPriceUsd,
+      entryMarketCapUsd: marketCapUsd,
       positionSizeUsd: result.usdSpent,
       takeProfitPct: settings.takeProfitPct,
       stopLossPct: settings.stopLossPct,
@@ -923,17 +930,20 @@ async function executeManualSell(ctx, context, pct) {
       reduceRealTrade(position.id, { tokenAmountRaw: remainingRaw, positionSizeUsd: remainingUsd });
     }
     const caption = `✅ Sold ${pct}% — proceeds ${fmtUsd(sellResult.proceedsUsd)} (${pnlUsd >= 0 ? "+" : ""}${fmtUsd(Math.abs(pnlUsd))}, ${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}%), gas ${fmtUsd(sellResult.gasUsd)}\nTx: \`${sellResult.txHash}\``;
-    const imageBuffer = renderCloseCard({
+    const imageBuffer = await renderCloseCard({
       chainLabel: chainDef.label,
       symbol: context.symbol,
       name: context.name,
       tradeMode: "real",
       entryPriceUsd: position.entry_price_usd,
+      entryMarketCapUsd: position.entry_market_cap_usd,
       exitPriceUsd,
+      currentMarketCapUsd: pair?.marketCapUsd,
       pnlUsd,
       pnlPct,
       exitReason: pct >= 100 ? "manual_close" : "manual_sell",
       tokenAddress,
+      holdDurationMs: Date.now() - position.entry_at,
     });
     await ctx.replyWithPhoto({ source: imageBuffer }, { caption, parse_mode: "Markdown" });
   } catch (err) {

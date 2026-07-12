@@ -282,6 +282,13 @@ addColumnIfMissing("real_trades", "comando_last_ai_check_at", "INTEGER");
 // realTrading.js.
 addColumnIfMissing("paper_trades", "price_unavailable_since", "INTEGER");
 addColumnIfMissing("real_trades", "price_unavailable_since", "INTEGER");
+// Entry-time market cap snapshot — the PnL card (telegram/tradeCard.js)
+// headlines "$SYMBOL @ <market cap>" the same way the RickBurpBot-style
+// reference card does, which needs a market-cap value captured at open
+// time (current market cap at close time comes from a fresh price-check
+// fetch already happening in the checker loops, no new column needed).
+addColumnIfMissing("paper_trades", "entry_market_cap_usd", "REAL");
+addColumnIfMissing("real_trades", "entry_market_cap_usd", "REAL");
 
 export function hasSeenPair(chain, pairAddress) {
   return !!db
@@ -487,12 +494,12 @@ export function openPaperTrade(entry) {
   const stmt = db.prepare(`
     INSERT INTO paper_trades
       (chain, token_address, symbol, name, entry_price_usd, position_size_usd,
-       take_profit_pct, stop_loss_pct, entry_at, last_checked_at, status)
+       take_profit_pct, stop_loss_pct, entry_at, last_checked_at, status, entry_market_cap_usd)
     VALUES (@chain, @tokenAddress, @symbol, @name, @entryPriceUsd, @positionSizeUsd,
-       @takeProfitPct, @stopLossPct, @entryAt, @entryAt, 'open')
+       @takeProfitPct, @stopLossPct, @entryAt, @entryAt, 'open', @entryMarketCapUsd)
     ON CONFLICT(chain, token_address) DO NOTHING
   `);
-  return stmt.run(entry);
+  return stmt.run({ entryMarketCapUsd: null, ...entry });
 }
 
 export function getOpenPaperTrades() {
@@ -573,13 +580,13 @@ export function openRealTrade(entry) {
     INSERT INTO real_trades
       (chain, token_address, symbol, name, entry_price_usd, position_size_usd,
        take_profit_pct, stop_loss_pct, entry_at, last_checked_at, status,
-       token_amount_raw, native_spent, entry_tx_hash, entry_gas_usd)
+       token_amount_raw, native_spent, entry_tx_hash, entry_gas_usd, entry_market_cap_usd)
     VALUES (@chain, @tokenAddress, @symbol, @name, @entryPriceUsd, @positionSizeUsd,
        @takeProfitPct, @stopLossPct, @entryAt, @entryAt, 'open',
-       @tokenAmountRaw, @nativeSpent, @entryTxHash, @entryGasUsd)
+       @tokenAmountRaw, @nativeSpent, @entryTxHash, @entryGasUsd, @entryMarketCapUsd)
     ON CONFLICT(chain, token_address) DO NOTHING
   `);
-  return stmt.run(entry);
+  return stmt.run({ entryMarketCapUsd: null, ...entry });
 }
 
 export function getOpenRealTrades() {

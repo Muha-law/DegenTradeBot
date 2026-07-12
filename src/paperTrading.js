@@ -69,7 +69,7 @@ function qualifiesForComando(trade, settings) {
 // whether real-money trading is ever turned on. No-ops quietly if paper
 // trading is disabled or the token's already-priced-in state won't work
 // (e.g. no usable entry price).
-export async function openPaperTradeIfRoom(bot, { chain, tokenAddress, symbol, name, priceUsd }) {
+export async function openPaperTradeIfRoom(bot, { chain, tokenAddress, symbol, name, priceUsd, marketCapUsd }) {
   const settings = loadPaperTradingSettings();
   if (!settings.enabled) return;
   if (!isSanePrice(priceUsd)) return;
@@ -98,6 +98,7 @@ export async function openPaperTradeIfRoom(bot, { chain, tokenAddress, symbol, n
     takeProfitPct: settings.takeProfitPct,
     stopLossPct: settings.stopLossPct,
     entryAt: Date.now(),
+    entryMarketCapUsd: marketCapUsd ?? null,
   });
   if (res.changes === 0) return; // already have an open/closed position for this token
 
@@ -111,12 +112,13 @@ export async function openPaperTradeIfRoom(bot, { chain, tokenAddress, symbol, n
     takeProfitPct: settings.takeProfitPct,
     stopLossPct: settings.stopLossPct,
   });
-  const imageBuffer = renderOpenCard({
+  const imageBuffer = await renderOpenCard({
     chainLabel: chain.label,
     symbol,
     name,
     tradeMode: "paper",
     entryPriceUsd: priceUsd,
+    entryMarketCapUsd: marketCapUsd,
     positionSizeUsd: settings.positionSizeUsd,
     takeProfitPct: settings.takeProfitPct,
     stopLossPct: settings.stopLossPct,
@@ -163,17 +165,20 @@ export function startPaperTradeChecker(bot) {
                 pnlPct,
                 exitReason: "stale_price",
               }),
-              imageBuffer: renderCloseCard({
+              imageBuffer: await renderCloseCard({
                 chainLabel: chain.label,
                 symbol: t.symbol,
                 name: t.name,
                 tradeMode: "paper",
                 entryPriceUsd: t.entry_price_usd,
+                entryMarketCapUsd: t.entry_market_cap_usd,
                 exitPriceUsd: 0,
+                currentMarketCapUsd: null,
                 pnlUsd,
                 pnlPct,
                 exitReason: "stale_price",
                 tokenAddress: t.token_address,
+                holdDurationMs: Date.now() - t.entry_at,
               }),
             });
           } else {
@@ -241,17 +246,20 @@ export function startPaperTradeChecker(bot) {
               pnlPct,
               exitReason,
             }),
-            imageBuffer: renderCloseCard({
+            imageBuffer: await renderCloseCard({
               chainLabel: chain.label,
               symbol: t.symbol,
               name: t.name,
               tradeMode: "paper",
               entryPriceUsd: t.entry_price_usd,
+              entryMarketCapUsd: t.entry_market_cap_usd,
               exitPriceUsd: pair.priceUsd,
+              currentMarketCapUsd: pair.marketCapUsd,
               pnlUsd,
               pnlPct,
               exitReason,
               tokenAddress: t.token_address,
+              holdDurationMs: Date.now() - t.entry_at,
             }),
           });
         } else {

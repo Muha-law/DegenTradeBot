@@ -63,7 +63,7 @@ function qualifiesForComando(trade, settings) {
 // buy, budget-capped by realTradingSettings, only if real trading is
 // explicitly enabled and a wallet is configured. No-ops otherwise — this
 // never runs alongside paper trading being the only thing enabled.
-export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, name, priceUsd }) {
+export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, name, priceUsd, marketCapUsd }) {
   const settings = loadRealTradingSettings();
   if (!settings.enabled) return;
   if (!hasWallet()) return;
@@ -98,6 +98,7 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, na
     return;
   }
 
+  const entryAt = Date.now();
   const res = openRealTrade({
     chain: chain.key,
     tokenAddress,
@@ -107,11 +108,12 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, na
     positionSizeUsd: settings.positionSizeUsd,
     takeProfitPct: settings.takeProfitPct,
     stopLossPct: settings.stopLossPct,
-    entryAt: Date.now(),
+    entryAt,
     tokenAmountRaw: result.tokenAmountRaw,
     nativeSpent: result.nativeSpent,
     entryTxHash: result.txHash,
     entryGasUsd: result.gasUsd,
+    entryMarketCapUsd: marketCapUsd ?? null,
   });
   if (res.changes === 0) {
     // Bought on-chain but a row already existed for this token (shouldn't
@@ -170,17 +172,20 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, na
           txHash: sellResult.txHash,
           gasUsd: sellResult.gasUsd,
         }),
-        imageBuffer: renderCloseCard({
+        imageBuffer: await renderCloseCard({
           chainLabel: chain.label,
           symbol,
           name,
           tradeMode: "real",
           entryPriceUsd: result.entryPriceUsd,
+          entryMarketCapUsd: marketCapUsd,
           exitPriceUsd: 0,
+          currentMarketCapUsd: null,
           pnlUsd,
           pnlPct,
           exitReason: "honeypot_immediate_exit",
           tokenAddress,
+          holdDurationMs: Date.now() - entryAt,
         }),
       });
     } catch (err) {
@@ -206,12 +211,13 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, na
       txHash: result.txHash,
       gasUsd: result.gasUsd,
     }),
-    imageBuffer: renderOpenCard({
+    imageBuffer: await renderOpenCard({
       chainLabel: chain.label,
       symbol,
       name,
       tradeMode: "real",
       entryPriceUsd: result.entryPriceUsd,
+      entryMarketCapUsd: marketCapUsd,
       positionSizeUsd: settings.positionSizeUsd,
       takeProfitPct: settings.takeProfitPct,
       stopLossPct: settings.stopLossPct,
@@ -282,17 +288,20 @@ export function startRealTradeChecker(bot) {
                 txHash: sellResult.txHash,
                 gasUsd: sellResult.gasUsd,
               }),
-              imageBuffer: renderCloseCard({
+              imageBuffer: await renderCloseCard({
                 chainLabel: chain.label,
                 symbol: t.symbol,
                 name: t.name,
                 tradeMode: "real",
                 entryPriceUsd: t.entry_price_usd,
+                entryMarketCapUsd: t.entry_market_cap_usd,
                 exitPriceUsd: 0,
+                currentMarketCapUsd: null,
                 pnlUsd,
                 pnlPct: realizedPnlPct,
                 exitReason: "stale_price_exit",
                 tokenAddress: t.token_address,
+                holdDurationMs: Date.now() - t.entry_at,
               }),
             });
           } else {
@@ -380,17 +389,20 @@ export function startRealTradeChecker(bot) {
               txHash: sellResult.txHash,
               gasUsd: sellResult.gasUsd,
             }),
-            imageBuffer: renderCloseCard({
+            imageBuffer: await renderCloseCard({
               chainLabel: chain.label,
               symbol: t.symbol,
               name: t.name,
               tradeMode: "real",
               entryPriceUsd: t.entry_price_usd,
+              entryMarketCapUsd: t.entry_market_cap_usd,
               exitPriceUsd: pair.priceUsd,
+              currentMarketCapUsd: pair.marketCapUsd,
               pnlUsd,
               pnlPct: realizedPnlPct,
               exitReason,
               tokenAddress: t.token_address,
+              holdDurationMs: Date.now() - t.entry_at,
             }),
           });
         } else {
