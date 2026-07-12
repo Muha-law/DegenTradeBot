@@ -1,3 +1,5 @@
+import { CHAINS } from "../chains.js";
+
 const explorerUrls = {
   ethereum: (addr) => `https://etherscan.io/token/${addr}`,
   base: (addr) => `https://basescan.org/token/${addr}`,
@@ -542,55 +544,75 @@ export function buildNftTradingSummary({ settings, stats, mode = "paper" }) {
   return lines.join("\n");
 }
 
+// "0.00%" / "+0.01%" / "-0.03%" — no sign on exactly zero, matching the
+// Bonkbot-style reference this format is modeled on.
+function fmtPctSigned(n) {
+  if (n == null || !Number.isFinite(n)) return "n/a";
+  if (n === 0) return "0.00%";
+  return `${n > 0 ? "+" : ""}${n.toFixed(2)}%`;
+}
+
+// Bonkbot-style dense position card: numbered, name linked out to the block
+// explorer, profit/value shown in both USD and native currency side by
+// side, market cap + compact price on one line, multi-timeframe price
+// change on another. Native-currency amounts (profit/value) are derived
+// from nativeUsdPrice already fetched alongside the trade — paper trades
+// never touched real currency, so this is a simulated equivalent ("if this
+// had been a real buy on this chain"), same spirit as the rest of paper
+// trading.
 export function buildActiveTradesMessage({ trades, totalUnrealizedUsd, walletBalances = [], mode = "paper" }) {
   const modeLabel = mode === "real" ? "Real Funds" : "Paper";
-  const showLabel = walletBalances.length > 1;
-  const walletLines = walletBalances.length
-    ? walletBalances
-        .map(
-          (b) =>
-            `💼 ${showLabel ? `${b.label}: ` : "Wallet: "}${b.balance.toFixed(5)} ${b.symbol}${
-              b.usdValue != null ? ` (~${fmtUsd(b.usdValue)})` : ""
-            }`
-        )
-        .join("\n") + "\n\n"
-    : "";
 
   if (trades.length === 0) {
-    return `${walletLines}📊 *Open Positions (0) — ${modeLabel}*\n\nNothing open right now.`;
+    return `📊 *Open Positions (0) — ${modeLabel}*\n\nNothing open right now.`;
   }
 
-  const lines = trades.map((t) => {
+  const lines = trades.map((t, i) => {
     const hasPrice = t.pnlPct != null;
-    const multLabel = hasPrice ? `${(1 + t.pnlPct / 100).toFixed(1)}x  ` : "";
-    const pctLabel = hasPrice ? `${t.pnlPct >= 0 ? "+" : ""}${t.pnlPct.toFixed(1)}%` : "price unavailable";
     const dot = !hasPrice ? "⚪️" : t.pnlPct >= 0 ? "🟢" : "🔴";
     const currentValueUsd = hasPrice ? t.position_size_usd + t.pnlUsd : t.position_size_usd;
-    const nowLabel = t.currentPriceUsd != null ? `$${fmtPrice(t.currentPriceUsd)}` : "n/a";
+    const chainLabel = CHAINS[t.chain]?.label || t.chain;
+    const nativeSymbol = CHAINS[t.chain]?.nativeSymbol || "";
+    const explorerUrl = explorerUrlFor(t.chain, t.token_address);
+    const name = escapeMd(t.symbol) || "?";
+    const nameLink = explorerUrl ? `[${name}](${explorerUrl})` : name;
     const comandoTag = t.comando_active
       ? ` 🪖 riding (floor +${t.take_profit_pct}%, peak +${(t.comando_peak_pct ?? t.pnlPct ?? 0).toFixed(1)}%)`
       : "";
 
-    return [
-      `${dot} *${escapeMd(t.symbol) || "?"}*  ${multLabel}(${pctLabel})${comandoTag}`,
-      `   Value: ${fmtUsd(currentValueUsd)} | MC: ${fmtUsd(t.marketCapUsd)} | Liq: ${fmtUsd(t.liquidityUsd)}`,
-      `   Entry: $${fmtPrice(t.entry_price_usd)} → Now: ${nowLabel}`,
-    ].join("\n");
+    if (!hasPrice) {
+      return [`${dot} *${i + 1}. ${nameLink}* (${chainLabel})${comandoTag}`, `Price unavailable — Entry: $${fmtPrice(t.entry_price_usd)}`].join("\n");
+    }
+
+    const nativePnl = t.nativeUsdPrice ? t.pnlUsd / t.nativeUsdPrice : null;
+    const nativeValue = t.nativeUsdPrice ? currentValueUsd / t.nativeUsdPrice : null;
+    const profitLine = `Profit: ${fmtPctSigned(t.pnlPct)}${nativePnl != null ? ` / ${nativePnl >= 0 ? "+" : ""}${nativePnl.toFixed(4)} ${nativeSymbol}` : ""}`;
+    const valueLine = `Value: ${fmtUsd(currentValueUsd)}${nativeValue != null ? ` / ${nativeValue.toFixed(4)} ${nativeSymbol}` : ""}`;
+    const mcapLine = `Mcap: ${fmtUsd(t.marketCapUsd)} @ ${fmtPriceCompact(t.currentPriceUsd)}`;
+    const changeLine = `5m: ${fmtPctSigned(t.priceChange5m)}  1h: ${fmtPctSigned(t.priceChange1h)}  6h: ${fmtPctSigned(t.priceChange6h)}  24h: ${fmtPctSigned(t.priceChange24h)}`;
+
+    return [`${dot} *${i + 1}. ${nameLink}* (${chainLabel})${comandoTag}`, profitLine, valueLine, mcapLine, changeLine].join("\n");
   });
 
   const totalValueUsd = trades.reduce((sum, t) => sum + (t.pnlUsd == null ? t.position_size_usd : t.position_size_usd + t.pnlUsd), 0);
-  const totalDeployedUsd = trades.reduce((sum, t) => sum + t.position_size_usd, 0);
-  const totalPct = totalDeployedUsd > 0 ? (totalUnrealizedUsd / totalDeployedUsd) * 100 : null;
-  const totalPctLabel = totalPct == null ? "" : ` (${totalPct >= 0 ? "+" : ""}${totalPct.toFixed(0)}%)`;
-  const totalPnlLabel = `${totalUnrealizedUsd >= 0 ? "+" : ""}${fmtUsd(Math.abs(totalUnrealizedUsd))}${totalPctLabel}`;
 
-  return [
-    walletLines + `📊 *Open Positions (${trades.length}) — ${modeLabel}*`,
-    "",
-    lines.join("\n\n"),
-    "",
-    "━━━━━━━━━━━━━━",
-    `Total Value: ${fmtUsd(totalValueUsd)}`,
-    `Unrealized PnL: ${totalPnlLabel}`,
-  ].join("\n");
+  // "Net Worth" mirrors the Bonkbot reference: wallet balance + total open
+  // position value combined, not just the positions. A native-currency
+  // total only makes sense when every balance shown is the same chain's
+  // currency (mixing ETH/BNB/etc. into one number would be meaningless) —
+  // falls back to USD-only otherwise.
+  const walletUsdTotal = walletBalances.reduce((sum, b) => sum + (b.usdValue || 0), 0);
+  const netWorthUsd = totalValueUsd + walletUsdTotal;
+  const singleSymbol = walletBalances.length > 0 && walletBalances.every((b) => b.symbol === walletBalances[0].symbol) ? walletBalances[0].symbol : null;
+  const netWorthNative = singleSymbol && walletBalances[0].usdValue ? walletBalances.reduce((sum, b) => sum + b.balance, 0) + totalValueUsd / (walletBalances[0].usdValue / walletBalances[0].balance) : null;
+
+  const footerLines = [];
+  if (walletBalances.length) {
+    for (const b of walletBalances) footerLines.push(`Balance: ${b.balance.toFixed(4)} ${b.symbol}${b.usdValue != null ? ` (${fmtUsd(b.usdValue)})` : ""}`);
+  }
+  footerLines.push(`Net Worth: ${netWorthNative != null ? `${netWorthNative.toFixed(4)} ${singleSymbol} / ` : ""}${fmtUsd(netWorthUsd)}`);
+  const totalPctLabel = totalValueUsd - totalUnrealizedUsd > 0 ? ` (${totalUnrealizedUsd >= 0 ? "+" : ""}${((totalUnrealizedUsd / (totalValueUsd - totalUnrealizedUsd)) * 100).toFixed(0)}%)` : "";
+  footerLines.push(`Unrealized PnL: ${totalUnrealizedUsd >= 0 ? "+" : ""}${fmtUsd(Math.abs(totalUnrealizedUsd))}${totalPctLabel}`);
+
+  return [`📊 *Open Positions (${trades.length}) — ${modeLabel}*`, "", lines.join("\n\n"), "", ...footerLines].join("\n");
 }

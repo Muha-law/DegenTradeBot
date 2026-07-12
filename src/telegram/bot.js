@@ -86,6 +86,10 @@ async function getOpenTradesWithLivePnl() {
       let marketCapUsd = null;
       let liquidityUsd = null;
       let nativeUsdPrice = null;
+      let priceChange5m = null;
+      let priceChange1h = null;
+      let priceChange6h = null;
+      let priceChange24h = null;
       try {
         const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
         const pair = pairSummary(dexPair, t.token_address);
@@ -96,12 +100,28 @@ async function getOpenTradesWithLivePnl() {
           marketCapUsd = pair.marketCapUsd;
           liquidityUsd = pair.liquidityUsd;
           nativeUsdPrice = pair.nativeUsdPrice;
+          priceChange5m = pair.priceChange5m;
+          priceChange1h = pair.priceChange1h;
+          priceChange6h = pair.priceChange6h;
+          priceChange24h = pair.priceChange24h;
         }
       } catch {
         // best-effort — leave nulls if the price lookup fails for this trade
       }
       if (pnlUsd != null) totalUnrealizedUsd += pnlUsd;
-      return { ...t, currentPriceUsd, pnlPct, pnlUsd, marketCapUsd, liquidityUsd, nativeUsdPrice };
+      return {
+        ...t,
+        currentPriceUsd,
+        pnlPct,
+        pnlUsd,
+        marketCapUsd,
+        liquidityUsd,
+        nativeUsdPrice,
+        priceChange5m,
+        priceChange1h,
+        priceChange6h,
+        priceChange24h,
+      };
     })
   );
 
@@ -149,6 +169,10 @@ async function getOpenRealTradesWithLivePnl() {
       let marketCapUsd = null;
       let liquidityUsd = null;
       let nativeUsdPrice = null;
+      let priceChange5m = null;
+      let priceChange1h = null;
+      let priceChange6h = null;
+      let priceChange24h = null;
       try {
         const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
         const pair = pairSummary(dexPair, t.token_address);
@@ -159,12 +183,28 @@ async function getOpenRealTradesWithLivePnl() {
           marketCapUsd = pair.marketCapUsd;
           liquidityUsd = pair.liquidityUsd;
           nativeUsdPrice = pair.nativeUsdPrice;
+          priceChange5m = pair.priceChange5m;
+          priceChange1h = pair.priceChange1h;
+          priceChange6h = pair.priceChange6h;
+          priceChange24h = pair.priceChange24h;
         }
       } catch {
         // best-effort — leave nulls if the price lookup fails for this trade
       }
       if (pnlUsd != null) totalUnrealizedUsd += pnlUsd;
-      return { ...t, currentPriceUsd, pnlPct, pnlUsd, marketCapUsd, liquidityUsd, nativeUsdPrice };
+      return {
+        ...t,
+        currentPriceUsd,
+        pnlPct,
+        pnlUsd,
+        marketCapUsd,
+        liquidityUsd,
+        nativeUsdPrice,
+        priceChange5m,
+        priceChange1h,
+        priceChange6h,
+        priceChange24h,
+      };
     })
   );
 
@@ -444,7 +484,9 @@ function paperTradingKeyboard(settings) {
 }
 
 function activeTradesKeyboard(trades = []) {
-  const rows = trades.map((t) => [Markup.button.callback(`🛑 Close #${t.id} ${t.symbol || "?"}`, `paperclosetrade:${t.id}`)]);
+  // Numbered to match buildActiveTradesMessage's "1. SYMBOL" list order —
+  // callback_data still carries the real DB id, only the visible label changed.
+  const rows = trades.map((t, i) => [Markup.button.callback(`🛑 Close #${i + 1} ${t.symbol || "?"}`, `paperclosetrade:${t.id}`)]);
   rows.push([Markup.button.callback("🔄 Refresh", "menu:paperactive")]);
   rows.push([Markup.button.callback("🔙 Paper Trading", "menu:papertrading")]);
   return Markup.inlineKeyboard(rows);
@@ -498,7 +540,7 @@ function manualTradeKeyboard(hasOpenPosition) {
 }
 
 function realActiveTradesKeyboard(trades = []) {
-  const rows = trades.map((t) => [Markup.button.callback(`🛑 Sell #${t.id} ${t.symbol || "?"}`, `realclosetrade:${t.id}`)]);
+  const rows = trades.map((t, i) => [Markup.button.callback(`🛑 Sell #${i + 1} ${t.symbol || "?"}`, `realclosetrade:${t.id}`)]);
   rows.push([Markup.button.callback("🔄 Refresh", "menu:realactive")]);
   rows.push([Markup.button.callback("🔙 Real Funds Trading", "menu:realtrading")]);
   return Markup.inlineKeyboard(rows);
