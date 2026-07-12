@@ -1,5 +1,7 @@
 import cron from "node-cron";
+import { CHAINS } from "./chains.js";
 import { isPaused } from "./botState.js";
+import { checkFreshFloorPrice } from "./filters/nftFilter.js";
 import { loadNftRealTradingSettings } from "./nftRealTradingSettings.js";
 import { getCollectionStats, getAccountEvents, openseaChainSlug } from "./risk/opensea.js";
 import { buyNftCollectionFloor, listNftForSale } from "./execution/nftExecutor.js";
@@ -22,15 +24,31 @@ const CHECK_CRON = "*/5 * * * *";
 // configured, budget check, and the hard per-buy ceiling enforced inside
 // buyNftCollectionFloor itself (defense in depth, independent of this
 // settings file — same rationale as the token side's ABSOLUTE_MAX_USD_PER_TRADE).
+//
+// Returns true only when a position was actually opened. The distinction
+// matters to nftBuyRecheckQueue: an early return here (budget exhausted, no
+// wallet) used to be indistinguishable from a successful buy, so the queue
+// removed pending entries it never actually bought.
 export async function openNftRealTradeIfRoom(bot, { chain, contractAddress, collectionSlug, name }) {
   const settings = loadNftRealTradingSettings();
-  if (!settings.enabled) return;
-  if (!hasWallet()) return;
+  if (!settings.enabled) return false;
+  if (!hasWallet()) return false;
 
   const stats = getNftRealTradingStats();
   if (stats.deployedEth + settings.positionSizeEth > settings.totalBudgetEth) {
     console.log(`[nftRealTrading] budget exhausted (${stats.deployedEth}/${settings.totalBudgetEth} ETH) — skipping ${name}`);
-    return;
+    return false;
+  }
+
+  // Fresh floor re-check right before spending real money — same role as
+  // realTrading.js's checkFreshLiquidity call: the filter pass that got us
+  // here can be minutes (or, via the recheck queue, hours) stale.
+  if (collectionSlug) {
+    const floorCheck = await checkFreshFloorPrice(collectionSlug);
+    if (!floorCheck.pass) {
+      console.log(`[nftRealTrading] ${name}: ${floorCheck.reason} — skipping buy`);
+      return false;
+    }
   }
 
   let result;
@@ -59,7 +77,9 @@ export async function openNftRealTradeIfRoom(bot, { chain, contractAddress, coll
   });
   if (res.changes === 0) {
     console.error(`[nftRealTrading] bought ${name} #${result.tokenId} but a DB row already existed — tx ${result.txHash} needs manual reconciliation`);
-    return;
+    // The on-chain buy DID happen — report true so the recheck queue never
+    // re-buys the same collection while the row conflict gets sorted out.
+    return true;
   }
 
   await postUpdate(
@@ -76,6 +96,7 @@ export async function openNftRealTradeIfRoom(bot, { chain, contractAddress, coll
       gasEth: result.gasEth,
     })
   );
+  return true;
 }
 
 export function startNftRealTradeChecker(bot) {
@@ -88,7 +109,7 @@ export function startNftRealTradeChecker(bot) {
 
     const open = getOpenNftRealTrades();
     for (const t of open) {
-      const chain = { key: t.chain, label: t.chain };
+      const chain = { key: t.chain, ...CHAINS[t.chain] };
       try {
         const stats = t.collection_slug ? await getCollectionStats(t.collection_slug).catch(() => null) : null;
         const floor = stats?.floorPriceEth;

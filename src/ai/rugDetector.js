@@ -49,6 +49,7 @@ export async function screenForRugPatterns({ name, symbol, deployerAddress, chai
   try {
     const res = await fetch(GROQ_API_URL, {
       method: "POST",
+      signal: AbortSignal.timeout(20000),
       headers: {
         Authorization: `Bearer ${config.groqApiKey}`,
         "Content-Type": "application/json",

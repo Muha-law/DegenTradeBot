@@ -47,7 +47,9 @@ async function runMilestoneCheck(bot) {
     const chain = { key: call.chain, ...chainDef };
 
     try {
-      if (Date.now() - call.called_at >= windowMs) {
+      // Pinned calls are exempt from the expiry window — the user explicitly
+      // asked to retain them on the Watchlist (see toggleCallPinned in db.js).
+      if (!call.pinned && Date.now() - call.called_at >= windowMs) {
         deactivateCall(call.id);
         continue;
       }

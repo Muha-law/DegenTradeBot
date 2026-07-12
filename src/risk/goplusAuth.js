@@ -14,6 +14,7 @@ async function fetchAccessToken() {
   const time = Math.floor(Date.now() / 1000);
   const res = await fetch(TOKEN_URL, {
     method: "POST",
+    signal: AbortSignal.timeout(20000),
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ app_key: config.goplusAppKey, sign: sign(config.goplusAppKey, time, config.goplusAppSecret), time }),
   });

@@ -300,6 +300,10 @@ addColumnIfMissing("real_trades", "entry_market_cap_usd", "REAL");
 addColumnIfMissing("called_nft_collections", "outcome_checked_at", "INTEGER");
 addColumnIfMissing("called_nft_collections", "outcome_floor_eth", "REAL");
 addColumnIfMissing("called_nft_collections", "outcome_pct", "REAL");
+// Pinned calls stay on the Watchlist indefinitely — the milestone checker
+// skips its normal expire-after-window deactivation for them (user-requested
+// "retain" control, the counterpart of the manual remove below).
+addColumnIfMissing("called_tokens", "pinned", "INTEGER NOT NULL DEFAULT 0");
 
 export function hasSeenPair(chain, pairAddress) {
   return !!db
@@ -401,6 +405,27 @@ export function updateCallProgress(id, { lastUpdatedAt }) {
 
 export function deactivateCall(id) {
   db.prepare("UPDATE called_tokens SET active = 0 WHERE id = ?").run(id);
+}
+
+// Manual Watchlist removal — matches by address alone (not chain+address)
+// since the user pastes a bare address from the Watchlist view; the same
+// contract address on two chains simultaneously active is rare enough that
+// removing both is the less surprising behavior. Returns how many were removed.
+export function deactivateCallByToken(tokenAddress) {
+  const res = db
+    .prepare("UPDATE called_tokens SET active = 0 WHERE LOWER(token_address) = LOWER(?) AND active = 1")
+    .run(tokenAddress);
+  return res.changes;
+}
+
+// Toggles retain-on-watchlist. Only meaningful on an active call — pinning
+// something already expired doesn't resurrect it (the row stays active=0).
+export function toggleCallPinned(tokenAddress) {
+  const row = db.prepare("SELECT id, pinned FROM called_tokens WHERE LOWER(token_address) = LOWER(?) AND active = 1").get(tokenAddress);
+  if (!row) return null;
+  const next = row.pinned ? 0 : 1;
+  db.prepare("UPDATE called_tokens SET pinned = ? WHERE id = ?").run(next, row.id);
+  return next === 1;
 }
 
 export function updateCallMilestone(id, { bestMilestoneHit, lastUpdateSentAt, lastUpdatePct }) {
@@ -653,13 +678,16 @@ export function closeRealTrade(id, { exitPriceUsd, exitReason, pnlUsd, pnlPct, n
 // token position, not a per-sell ledger. The realized PnL for the sold
 // portion is reported in the moment (Telegram message) but isn't separately
 // queryable later — a known, disclosed limitation of the partial-sell path.
-export function reduceRealTrade(id, { tokenAmountRaw, positionSizeUsd }) {
-  db.prepare("UPDATE real_trades SET token_amount_raw = ?, position_size_usd = ?, last_checked_at = ? WHERE id = ?").run(
-    tokenAmountRaw,
-    positionSizeUsd,
-    Date.now(),
-    id
-  );
+// entryPriceUsd is optional (COALESCE keeps the existing value when absent):
+// partial sells don't change the entry price, but the manual-buy
+// add-to-position path passes a cost-blended entry — previously that value
+// was accepted here and silently dropped, so every later PnL check,
+// take-profit, and stop-loss on a merged position ran against the original
+// entry price instead of the blend.
+export function reduceRealTrade(id, { tokenAmountRaw, positionSizeUsd, entryPriceUsd }) {
+  db.prepare(
+    "UPDATE real_trades SET token_amount_raw = ?, position_size_usd = ?, entry_price_usd = COALESCE(?, entry_price_usd), last_checked_at = ? WHERE id = ?"
+  ).run(tokenAmountRaw, positionSizeUsd, entryPriceUsd ?? null, Date.now(), id);
 }
 
 export function getOpenRealTradeByToken(chain, tokenAddress) {

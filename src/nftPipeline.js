@@ -76,8 +76,10 @@ async function maybeOpenRealTrade(bot, { chain, contractAddress, collectionSlug,
 
   if (floorPriceEth > 0) {
     try {
-      await openNftRealTradeIfRoom(bot, { chain, contractAddress, collectionSlug, name });
-      return;
+      const opened = await openNftRealTradeIfRoom(bot, { chain, contractAddress, collectionSlug, name });
+      if (opened) return;
+      // Skipped for a retryable reason (budget/wallet/floor moved) — fall
+      // through and queue so the recheck loop can try again as conditions change.
     } catch {
       // Fall through to the pending queue — e.g. the listing that made
       // floorPriceEth > 0 got fulfilled by someone else in the gap between
@@ -99,6 +101,10 @@ export async function retryNftPendingBuy(bot, { chain, contractAddress }) {
   const collection = slug ? await getCollection(slug).catch(() => null) : null;
   const name = collection?.name || contractInfo?.name || null;
 
-  await openNftRealTradeIfRoom(bot, { chain, contractAddress, collectionSlug: slug, name });
-  return { bought: true };
+  // openNftRealTradeIfRoom returns false (no throw) when it skipped for a
+  // retryable reason — budget exhausted, no wallet, floor moved. Reporting
+  // those as bought:true made the recheck queue permanently dequeue entries
+  // it never actually bought.
+  const opened = await openNftRealTradeIfRoom(bot, { chain, contractAddress, collectionSlug: slug, name });
+  return { bought: opened === true };
 }

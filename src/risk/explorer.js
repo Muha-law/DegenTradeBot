@@ -19,7 +19,7 @@ export async function getContractCreator(etherscanChainId, tokenAddress) {
     apikey: config.etherscanApiKey,
   });
 
-  const res = await fetch(`${BASE_URL}?${params}`);
+  const res = await fetch(`${BASE_URL}?${params}`, { signal: AbortSignal.timeout(20000) });
   if (!res.ok) throw new Error(`Etherscan API error ${res.status}: ${await res.text()}`);
   const body = await res.json();
 
@@ -52,7 +52,7 @@ export async function getDeployerTxCount(etherscanChainId, deployerAddress) {
     apikey: config.etherscanApiKey,
   });
 
-  const res = await fetch(`${BASE_URL}?${params}`);
+  const res = await fetch(`${BASE_URL}?${params}`, { signal: AbortSignal.timeout(20000) });
   if (!res.ok) throw new Error(`Etherscan API error ${res.status}: ${await res.text()}`);
   const body = await res.json();
   if (body.status !== "1" || !Array.isArray(body.result)) return { txCount: 0, contractCreations: 0 };

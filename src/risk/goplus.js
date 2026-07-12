@@ -13,7 +13,7 @@ export async function getTokenSecurity(goplusChainId, tokenAddress) {
   const accessToken = await getGoplusAccessToken();
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
-  const res = await fetch(url, { headers });
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
   if (!res.ok) throw new Error(`GoPlus API error ${res.status}: ${await res.text()}`);
   const body = await res.json();
   if (body.code !== 1) throw new Error(`GoPlus API returned code ${body.code}: ${body.message}`);
@@ -34,7 +34,7 @@ export async function getNftSecurity(goplusChainId, contractAddress) {
   const accessToken = await getGoplusAccessToken();
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
-  const res = await fetch(url, { headers });
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
   if (!res.ok) throw new Error(`GoPlus NFT API error ${res.status}: ${await res.text()}`);
   const body = await res.json();
   if (body.code !== 1) throw new Error(`GoPlus NFT API returned code ${body.code}: ${body.message}`);

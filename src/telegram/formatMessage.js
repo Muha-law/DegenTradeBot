@@ -93,7 +93,7 @@ export function buildCallMessage({ chain, tokenAddress, riskResult, name, symbol
   const dexUrl = pair?.pairUrl || `https://dexscreener.com/${chain.dexscreenerChainId}/${tokenAddress}`;
 
   const lines = [
-    `📣 *NEW CALL* — ${name || "Unknown"} (${symbol || "?"}) on ${chain.label}`,
+    `📣 *NEW CALL* — ${escapeMd(name) || "Unknown"} (${escapeMd(symbol) || "?"}) on ${chain.label}`,
     "",
     `${gradeEmoji[grade]} *Risk Score: ${score}/100 — ${grade} (${label})*`,
     `  • Contract safety: ${breakdown.contractSafety}/35`,
@@ -138,8 +138,8 @@ export function buildMilestoneMessage({
   const ago = timeAgo(sinceMs);
 
   const lines = [
-    `${fire ? fire + " " : "🚀 "}#${symbol || "?"} up ${milestonePct}%+ since tracked${ago ? ` ${ago}` : ""} (${multiplier.toFixed(2)}x)`,
-    `${name || "Unknown"} on ${chain.label}`,
+    `${fire ? fire + " " : "🚀 "}#${escapeMd(symbol) || "?"} up ${milestonePct}%+ since tracked${ago ? ` ${ago}` : ""} (${multiplier.toFixed(2)}x)`,
+    `${escapeMd(name) || "Unknown"} on ${chain.label}`,
   ];
 
   if (trackMarketCapUsd && currentMcap) {
@@ -164,12 +164,12 @@ export function buildTrackAlertMessage({ chain, tokenAddress, name, symbol, trac
   const agoSuffix = ago ? ` ${ago}` : "";
   const headline =
     kind === "dead"
-      ? `💀 #${symbol || "?"} looks dead — down ${Math.abs(pct).toFixed(0)}% since tracked${agoSuffix}`
-      : `🔴 #${symbol || "?"} down ${Math.abs(pct).toFixed(0)}% since tracked${agoSuffix}`;
+      ? `💀 #${escapeMd(symbol) || "?"} looks dead — down ${Math.abs(pct).toFixed(0)}% since tracked${agoSuffix}`
+      : `🔴 #${escapeMd(symbol) || "?"} down ${Math.abs(pct).toFixed(0)}% since tracked${agoSuffix}`;
 
   return [
     headline,
-    `${name || "Unknown"} on ${chain.label}`,
+    `${escapeMd(name) || "Unknown"} on ${chain.label}`,
     "",
     `Tracked at: $${fmtPrice(trackPriceUsd)}`,
     `Now: $${fmtPrice(currentPrice)}`,
@@ -189,10 +189,10 @@ export function buildFollowUpMessage({ chain, tokenAddress, name, symbol, callPr
   const ago = timeAgo(sinceMs);
 
   return [
-    `${fire ? fire + " " : arrow + " "}#${symbol || "?"} now ${currentPct >= 0 ? "+" : ""}${currentPct.toFixed(0)}% since call${ago ? ` ${ago}` : ""} (was ${
+    `${fire ? fire + " " : arrow + " "}#${escapeMd(symbol) || "?"} now ${currentPct >= 0 ? "+" : ""}${currentPct.toFixed(0)}% since call${ago ? ` ${ago}` : ""} (was ${
       lastPct >= 0 ? "+" : ""
     }${lastPct.toFixed(0)}%)`,
-    `${name || "Unknown"} on ${chain.label}`,
+    `${escapeMd(name) || "Unknown"} on ${chain.label}`,
     "",
     `Call price: $${fmtPrice(callPriceUsd)}`,
     `Current price: $${fmtPrice(currentPrice)}`,
@@ -216,7 +216,7 @@ export function buildWatchlistDigest(entries, offset = 0) {
   const lines = shown.map((e, i) => {
     const pctLabel = e.pct === null ? "n/a" : `${e.pct >= 0 ? "🟢+" : "🔴"}${e.pct.toFixed(1)}%`;
     const priceLabel = e.currentPrice ? ` — $${fmtPrice(e.currentPrice)}` : "";
-    return `${offset + i + 1}. *${e.symbol || "?"}* (${e.chain}) ${pctLabel}${priceLabel}\n   \`${e.tokenAddress}\``;
+    return `${offset + i + 1}. ${e.pinned ? "📌 " : ""}*${escapeMd(e.symbol) || "?"}* (${e.chain}) ${pctLabel}${priceLabel}\n   \`${e.tokenAddress}\``;
   });
 
   const from = offset + 1;
@@ -228,7 +228,7 @@ export function buildWatchlistDigest(entries, offset = 0) {
 
 export function buildPaperTradeOpenMessage({ chain, tokenAddress, name, symbol, entryPriceUsd, positionSizeUsd, takeProfitPct, stopLossPct }) {
   return [
-    `📝 *Paper trade opened* — ${name || "Unknown"} (${symbol || "?"}) on ${chain.label}`,
+    `📝 *Paper trade opened* — ${escapeMd(name) || "Unknown"} (${escapeMd(symbol) || "?"}) on ${chain.label}`,
     `Entry: $${fmtPrice(entryPriceUsd)} | Size: ${fmtUsd(positionSizeUsd)}`,
     `Target: +${takeProfitPct}% | Stop: ${stopLossPct}%`,
     "",
@@ -255,7 +255,7 @@ export function buildPaperTradeCloseMessage({ chain, tokenAddress, name, symbol,
 
   return [
     `${headline}`,
-    `${name || "Unknown"} (${symbol || "?"}) on ${chain.label}`,
+    `${escapeMd(name) || "Unknown"} (${escapeMd(symbol) || "?"}) on ${chain.label}`,
     `${won ? "🟢" : "🔴"} ${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}% (${pnlUsd >= 0 ? "+" : ""}${fmtUsd(Math.abs(pnlUsd))})`,
     "",
     `Entry: $${fmtPrice(entryPriceUsd)} | Exit: $${fmtPrice(exitPriceUsd)}`,
@@ -270,7 +270,7 @@ export function buildPaperTradeCloseMessage({ chain, tokenAddress, name, symbol,
 export function buildComandoActivatedMessage({ chain, tokenAddress, name, symbol, pnlPct, floorPct }) {
   return [
     `🪖 *SUPER COMANDO activated* — letting it ride`,
-    `${name || "Unknown"} (${symbol || "?"}) on ${chain.label}`,
+    `${escapeMd(name) || "Unknown"} (${escapeMd(symbol) || "?"}) on ${chain.label}`,
     `Hit +${pnlPct.toFixed(1)}% — instead of taking profit, holding for more.`,
     `Protected floor: +${floorPct.toFixed(1)}% (auto-sells if it drops below this)`,
     "",
@@ -290,7 +290,7 @@ const txExplorerUrls = {
 export function buildRealTradeOpenMessage({ chain, tokenAddress, name, symbol, entryPriceUsd, positionSizeUsd, takeProfitPct, stopLossPct, txHash, gasUsd }) {
   const explorer = txExplorerUrls[chain.key]?.(txHash);
   return [
-    `💰 *REAL trade opened* — ${name || "Unknown"} (${symbol || "?"}) on ${chain.label}`,
+    `💰 *REAL trade opened* — ${escapeMd(name) || "Unknown"} (${escapeMd(symbol) || "?"}) on ${chain.label}`,
     `Entry: $${fmtPrice(entryPriceUsd)} | Size: ${fmtUsd(positionSizeUsd)} | Gas: ${fmtUsd(gasUsd)}`,
     `Target: +${takeProfitPct}% | Stop: ${stopLossPct}%`,
     "",
@@ -325,7 +325,7 @@ export function buildRealTradeCloseMessage({ chain, tokenAddress, name, symbol, 
 
   return [
     `${headline}`,
-    `${name || "Unknown"} (${symbol || "?"}) on ${chain.label}`,
+    `${escapeMd(name) || "Unknown"} (${escapeMd(symbol) || "?"}) on ${chain.label}`,
     `${won ? "🟢" : "🔴"} ${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}% (${pnlUsd >= 0 ? "+" : ""}${fmtUsd(Math.abs(pnlUsd))})`,
     `Entry: $${fmtPrice(entryPriceUsd)} | Exit: $${fmtPrice(exitPriceUsd)} | Gas: ${fmtUsd(gasUsd)}`,
     "",
@@ -525,12 +525,11 @@ export function buildNftRealTradeCloseMessage({ chain, contractAddress, name, to
 export function buildNftTradingSummary({ settings, stats, mode = "paper" }) {
   const modeLabel = mode === "real" ? "💰 *Real NFT Trading*" : "📈 *NFT Paper Trading*";
   const statusLabel = mode === "real" ? (settings.enabled ? "🔴 LIVE — real money" : "⚪️ off") : settings.enabled ? "🟢 running" : "⏸ paused";
-  const budgetUnit = mode === "real" ? "totalBudgetEth" : "totalBudgetEth";
   const lines = [
     modeLabel,
     "",
     `Status: ${statusLabel}`,
-    `Budget: ${fmtEth(settings[budgetUnit])} total | ${fmtEth(settings.positionSizeEth)}/item`,
+    `Budget: ${fmtEth(settings.totalBudgetEth)} total | ${fmtEth(settings.positionSizeEth)}/item`,
     `Target: ${settings.targetMultiple}x floor | Stop: ${settings.stopFloorPct}% of entry`,
     "⚠️ NFT exits list on OpenSea and wait for a buyer — not an instant swap like token trading.",
     "",
@@ -574,7 +573,11 @@ export function buildActiveTradesMessage({ trades, totalUnrealizedUsd, walletBal
     const chainLabel = CHAINS[t.chain]?.label || t.chain;
     const nativeSymbol = CHAINS[t.chain]?.nativeSymbol || "";
     const explorerUrl = explorerUrlFor(t.chain, t.token_address);
-    const name = escapeMd(t.symbol) || "?";
+    // Link text can't just be escapeMd'd — escapeMd covers _*`[ but not ]
+    // or ), and either of those inside [text](url) terminates the link
+    // early, corrupting the whole message. Strip them from the display name
+    // instead (only affects how the symbol renders, not what's stored).
+    const name = escapeMd((t.symbol || "?").replace(/[\][()]/g, "")) || "?";
     const nameLink = explorerUrl ? `[${name}](${explorerUrl})` : name;
     const comandoTag = t.comando_active
       ? ` 🪖 riding (floor +${t.take_profit_pct}%, peak +${(t.comando_peak_pct ?? t.pnlPct ?? 0).toFixed(1)}%)`

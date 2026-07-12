@@ -27,6 +27,8 @@ import {
   recordBotUser,
   countBotUsers,
   getRecentCalls,
+  deactivateCallByToken,
+  toggleCallPinned,
   getWatchedWallets,
   addWatchedWallet,
   removeWatchedWallet,
@@ -698,6 +700,7 @@ function watchlistKeyboard(offset, total) {
   const rows = [];
   if (navRow.length) rows.push(navRow);
   rows.push([Markup.button.callback("🔄 Update", "watchlistpage:0")]);
+  rows.push([Markup.button.callback("📌 Pin/Unpin Call", "menu:pincall"), Markup.button.callback("🗑 Remove Call", "menu:removecall")]);
   rows.push([Markup.button.callback(`⏱ Auto-update every ${intervalMinutes}m (tap to change)`, "menu:digestinterval")]);
   rows.push([Markup.button.callback("🔙 Menu", "menu:home")]);
   return Markup.inlineKeyboard(rows);
@@ -1180,6 +1183,27 @@ async function handlePendingAction(ctx, pending, text, digestControls) {
     return ctx.reply(`Updated *${pending.key}*: ${prev} → ${value}${note}`, { parse_mode: "Markdown", ...backKeyboard() });
   }
 
+  if (pending.type === "removeCall" || pending.type === "pinCall") {
+    const match = text.match(ADDRESS_RE);
+    if (!match) return ctx.reply("That doesn't look like a valid contract address — tap the button again to retry.");
+    const tokenAddress = match[0];
+    if (pending.type === "removeCall") {
+      const removed = deactivateCallByToken(tokenAddress);
+      return ctx.reply(removed > 0 ? `🗑 Removed ${removed} call(s) for \`${tokenAddress}\` from the Watchlist.` : "No active call found for that address.", {
+        parse_mode: "Markdown",
+        ...backKeyboard(),
+      });
+    }
+    const nowPinned = toggleCallPinned(tokenAddress);
+    if (nowPinned === null) return ctx.reply("No active call found for that address.", { ...backKeyboard() });
+    return ctx.reply(
+      nowPinned
+        ? `📌 Pinned \`${tokenAddress}\` — it stays on the Watchlist until you unpin or remove it.`
+        : `📌 Unpinned \`${tokenAddress}\` — normal tracking-window expiry applies again.`,
+      { parse_mode: "Markdown", ...backKeyboard() }
+    );
+  }
+
   if (pending.type === "nftScore") {
     const contractAddress = text.trim();
     if (!ADDRESS_RE.test(contractAddress)) {
@@ -1365,6 +1389,20 @@ export function createBot(stats, chainControls, digestControls) {
     const offset = Number(ctx.match[1]);
     const { text, total } = await renderWatchlistPage(offset);
     await safeEdit(ctx, text, watchlistKeyboard(offset, total));
+  });
+
+  bot.action("menu:removecall", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    setPending(ctx.chat.id, { type: "removeCall" });
+    await ctx.reply("Paste the contract address of the call to remove from the Watchlist.");
+  });
+
+  bot.action("menu:pincall", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    setPending(ctx.chat.id, { type: "pinCall" });
+    await ctx.reply("Paste the contract address of the call to pin (or unpin) — pinned calls stay on the Watchlist past the normal tracking window.");
   });
 
   bot.action("menu:digestinterval", async (ctx) => {
@@ -1896,6 +1934,20 @@ export function createBot(stats, chainControls, digestControls) {
     );
   });
 
+  // Legacy remove buttons (pre-pagination messages still live in chat
+  // history) carry callback data without the :offset suffix — treat them as
+  // page 0 rather than silently ignoring the tap.
+  bot.action(/^nftwalletremove:(0x[a-fA-F0-9]{40})$/, async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    const removed = removeWatchedWallet(ctx.match[1]);
+    await ctx.answerCbQuery(removed ? "Removed." : "Not found.");
+    const { shown, total } = pageWatchedWallets(getWatchedWallets(), 0);
+    await safeEdit(ctx, renderWatchedWalletsText(shown, total, 0), nftWalletsKeyboard(shown, total, 0));
+  });
+
   bot.action(/^nftwalletremove:(0x[a-fA-F0-9]{40}):(\d+)$/, async (ctx) => {
     if (!isAdmin(ctx)) {
       await ctx.answerCbQuery("Not authorized.");
@@ -2080,6 +2132,21 @@ export function createBot(stats, chainControls, digestControls) {
     if (!resolved) return;
     const removed = deactivateTrack(resolved.chainKey, resolved.tokenAddress);
     ctx.reply(removed ? "Stopped tracking." : "Wasn't tracking that token.");
+  });
+  bot.command("removecall", (ctx) => {
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    const [, address] = ctx.message.text.split(/\s+/);
+    if (!address || !ADDRESS_RE.test(address)) return ctx.reply("Usage: /removecall <tokenAddress>");
+    const removed = deactivateCallByToken(address);
+    ctx.reply(removed > 0 ? `🗑 Removed ${removed} call(s) from the Watchlist.` : "No active call found for that address.");
+  });
+  bot.command("pincall", (ctx) => {
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    const [, address] = ctx.message.text.split(/\s+/);
+    if (!address || !ADDRESS_RE.test(address)) return ctx.reply("Usage: /pincall <tokenAddress>");
+    const nowPinned = toggleCallPinned(address);
+    if (nowPinned === null) return ctx.reply("No active call found for that address.");
+    ctx.reply(nowPinned ? "📌 Pinned — stays on the Watchlist until unpinned/removed." : "📌 Unpinned — normal expiry applies again.");
   });
   bot.command("nftfilter", (ctx) => {
     if (!requireOpensea(ctx)) return ctx.reply("NFT features need OPENSEA_API_KEY set in .env.");
@@ -2286,13 +2353,18 @@ export async function postTradeCard(bot, { caption, imageBuffer }) {
 // worth showing inline rather than just linking out.
 export async function postNftCall(bot, { chain, contractAddress, riskResult, source, triggerWalletLabel }) {
   const message = truncateForTelegram(buildNftCallMessage({ chain, contractAddress, riskResult, source, triggerWalletLabel }));
+  // sendPhoto captions cap at 1024 chars — a quarter of a text message's
+  // 4096. Truncating both to 4096 meant any flag-heavy call (i.e. exactly
+  // the risky ones) failed the photo send on every destination and fell
+  // back to text, so images never appeared where they mattered most.
+  const caption = truncateCaption(message);
   const imageUrl = riskResult.imageUrl;
 
   let primaryMessageId = null;
   for (const destination of config.telegram.destinations) {
     try {
       const sent = imageUrl
-        ? await bot.telegram.sendPhoto(destination, imageUrl, { caption: message, parse_mode: "Markdown" })
+        ? await bot.telegram.sendPhoto(destination, imageUrl, { caption, parse_mode: "Markdown" })
         : await bot.telegram.sendMessage(destination, message, { parse_mode: "Markdown" });
       if (destination === config.telegram.chatId) primaryMessageId = sent.message_id;
     } catch (err) {

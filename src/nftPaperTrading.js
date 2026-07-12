@@ -1,4 +1,5 @@
 import cron from "node-cron";
+import { CHAINS } from "./chains.js";
 import { isPaused } from "./botState.js";
 import { loadNftPaperTradingSettings } from "./nftPaperTradingSettings.js";
 import { getCollectionStats } from "./risk/opensea.js";
@@ -68,7 +69,7 @@ export function startNftPaperTradeChecker(bot) {
 
     const open = getOpenNftPaperTrades();
     for (const t of open) {
-      const chain = { key: t.chain, label: t.chain };
+      const chain = { key: t.chain, ...CHAINS[t.chain] };
       try {
         const stats = t.collection_slug ? await getCollectionStats(t.collection_slug).catch(() => null) : null;
         const floor = stats?.floorPriceEth;

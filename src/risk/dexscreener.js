@@ -5,7 +5,7 @@ const BASE_URL = "https://api.dexscreener.com";
 // Returns the highest-liquidity pair for a token on a given chain, or null.
 export async function getBestPair(dexscreenerChainId, tokenAddress) {
   const url = `${BASE_URL}/token-pairs/v1/${dexscreenerChainId}/${tokenAddress}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
   if (!res.ok) {
     if (res.status === 404) return null;
     throw new Error(`DexScreener API error ${res.status}: ${await res.text()}`);
@@ -24,7 +24,7 @@ export async function getBestPair(dexscreenerChainId, tokenAddress) {
 // chain a pasted address belongs to before we know it ourselves.
 export async function searchToken(query) {
   const url = `${BASE_URL}/latest/dex/search?q=${encodeURIComponent(query)}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
   if (!res.ok) throw new Error(`DexScreener search error ${res.status}: ${await res.text()}`);
   const body = await res.json();
   return body.pairs || [];

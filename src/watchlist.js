@@ -37,7 +37,9 @@ export async function buildDigestEntries() {
   // the bot is paused, so this view needs its own independent expiry check
   // rather than trusting `active` to already be current.
   const now = Date.now();
-  const active = getActiveCalls().filter((call) => now - call.called_at < windowMs);
+  // Pinned calls are shown regardless of age — same exemption the milestone
+  // checker's deactivation applies (see priceUpdater.js).
+  const active = getActiveCalls().filter((call) => call.pinned || now - call.called_at < windowMs);
 
   const entries = await Promise.all(
     active.map(async (call) => {
@@ -49,6 +51,7 @@ export async function buildDigestEntries() {
         tokenAddress: call.token_address,
         pct: result?.pct ?? null,
         currentPrice: result?.pair?.priceUsd ?? null,
+        pinned: Boolean(call.pinned),
       };
     })
   );

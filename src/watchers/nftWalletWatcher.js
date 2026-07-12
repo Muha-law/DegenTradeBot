@@ -1,22 +1,13 @@
 import { getAccountEvents, openseaChainSlug } from "../risk/opensea.js";
 import { getWatchedWallets, hasNftCopySignal, recordNftCopySignal } from "../store/db.js";
 
-// Rest between full cycles once every watched wallet has been checked —
-// meaningful mainly for small wallet lists (a handful of wallets would
-// otherwise get re-polled near-instantly in a tight loop). For large lists
-// this is dwarfed by MIN_INTER_WALLET_DELAY_MS below.
+// Rest between full cycles once every watched wallet has been checked.
+// Request pacing itself lives in opensea.js's global limiter (shared with
+// every other OpenSea caller in the process) — a per-watcher delay here
+// couldn't see the true combined rate across two chain watchers plus the
+// outcome tracker and trade checkers, and together they blew the 60/min
+// free-tier ceiling even though each watcher individually looked paced.
 const POLL_INTERVAL_MS = 30000;
-
-// Minimum spacing between each wallet's OpenSea call within one cycle.
-// Firing all of them back-to-back was fine at a handful of wallets, but
-// silently breaks at real scale (96+ wallets, one full cycle in a tight
-// loop = 96+ reads inside a few seconds) — OpenSea's own documented free-
-// tier ceiling is 60 reads/min. ~1.1s spacing keeps this comfortably under
-// that regardless of exact key tier, at the cost of each individual wallet
-// getting checked less often as the list grows (a 96-wallet list checks
-// each wallet roughly every 100-130s, not every 30s) — a live-freshness
-// tradeoff, not a correctness one; nothing is dropped, just delayed.
-const MIN_INTER_WALLET_DELAY_MS = 1100;
 
 // How far back to look on a wallet the very first time it's polled (either
 // on process start, or right after being added via Telegram) — without
@@ -25,7 +16,14 @@ const MIN_INTER_WALLET_DELAY_MS = 1100;
 // long-stale copy signals for a wallet that's just been added.
 const INITIAL_BACKFILL_MS = 15 * 60 * 1000;
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// How far the per-wallet cursor deliberately trails real time. OpenSea's
+// event indexing lags the chain — a sale that happened 3 minutes ago can
+// appear in the events feed 5+ minutes later. Advancing the cursor to "now"
+// after each poll put those late-indexed events permanently behind the
+// cursor: never returned, never signaled. The overlap this window creates
+// re-fetches recent events every poll; hasNftCopySignal dedup makes that
+// harmless.
+const INDEXING_LAG_WINDOW_MS = 10 * 60 * 1000;
 
 // Reloads the watched-wallet list from the DB every poll (cheap local
 // query) so wallets added/removed via Telegram take effect without a
@@ -68,28 +66,31 @@ export function startNftWalletWatcher(chain, onWalletBuy) {
       });
     }
 
-    cursors.set(address, Math.max(maxOccurredAtSec, nowSec - 1) + 1);
+    // Advance the cursor only up to the trailing edge of the lag window —
+    // never to "now" (see INDEXING_LAG_WINDOW_MS). Late-indexed events land
+    // inside the window and get picked up on a later poll.
+    const trailingEdgeSec = Math.floor((Date.now() - INDEXING_LAG_WINDOW_MS) / 1000);
+    cursors.set(address, Math.min(Math.max(maxOccurredAtSec, occurredAfter), trailingEdgeSec));
   }
 
   async function poll() {
     if (stopped) return;
     try {
       const wallets = getWatchedWallets();
-      for (let i = 0; i < wallets.length; i++) {
+      for (const w of wallets) {
         if (stopped) break;
         try {
-          await pollWallet(wallets[i].address);
+          await pollWallet(w.address);
         } catch (err) {
-          console.error(`[${chain.key}] NFT wallet-watch poll failed for ${wallets[i].address}:`, err.message);
+          console.error(`[${chain.key}] NFT wallet-watch poll failed for ${w.address}:`, err.message);
         }
-        if (!stopped && i < wallets.length - 1) await sleep(MIN_INTER_WALLET_DELAY_MS);
       }
     } finally {
       if (!stopped) timer = setTimeout(poll, POLL_INTERVAL_MS);
     }
   }
 
-  console.log(`[${chain.key}] polling OpenSea for watched-wallet NFT buys (~${MIN_INTER_WALLET_DELAY_MS}ms apart per wallet, ${POLL_INTERVAL_MS}ms rest between full cycles)`);
+  console.log(`[${chain.key}] polling OpenSea for watched-wallet NFT buys (request pacing via the global OpenSea limiter, ${POLL_INTERVAL_MS}ms rest between cycles)`);
   poll();
 
   return function stop() {

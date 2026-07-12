@@ -85,7 +85,13 @@ export function applyNftFilter(riskResult, { source, triggerBuyPriceEth, trigger
   // no history to gate on until the tracker has run for a while.
   if (source === "copy_trade" && triggerWalletAddress && (filters.minWalletSignals > 0 || filters.minWalletWinRatePercent > 0)) {
     const record = getWalletTrackRecord(triggerWalletAddress);
-    if (record.signals >= filters.minWalletSignals) {
+    // A wallet with zero resolved signals always passes — it hasn't had the
+    // chance to build a record yet, and judging it as "0% win rate" would
+    // block every newly-added wallet forever the moment
+    // minWalletWinRatePercent is set (signals >= 0 is vacuously true under
+    // the default minWalletSignals of 0, which is exactly how the earlier
+    // version of this gate misfired).
+    if (record.signals > 0 && record.signals >= filters.minWalletSignals) {
       const winRatePct = (record.winRate ?? 0) * 100;
       if (winRatePct < filters.minWalletWinRatePercent) {
         reasons.push(`Wallet's copy-trade win rate ${winRatePct.toFixed(0)}% below minimum ${filters.minWalletWinRatePercent}% (${record.signals} tracked signals)`);

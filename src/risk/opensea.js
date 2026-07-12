@@ -15,20 +15,47 @@ function requireApiKey() {
   return config.openseaApiKey;
 }
 
+// Global limiter across EVERY OpenSea call this process makes — two chain
+// watchers, the wallet watcher, the outcome tracker, and the trade checkers
+// all share one API key with a documented free-tier ceiling of 60 reads/min.
+// Pacing per-watcher (the first attempt) doesn't compose: each watcher
+// individually respected its own spacing while their combined rate blew the
+// budget (~109/min with two chains and 95 watched wallets). A single
+// serialized queue is the only spot that sees the true global rate.
+const MIN_REQUEST_SPACING_MS = 1100;
+let requestChain = Promise.resolve();
+let lastRequestAt = 0;
+
+function throttled(fn) {
+  const run = requestChain.then(async () => {
+    const wait = lastRequestAt + MIN_REQUEST_SPACING_MS - Date.now();
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    lastRequestAt = Date.now();
+    return fn();
+  });
+  // The chain must survive individual failures — anchor the next request on
+  // settled, not fulfilled, or one 429 would break the queue forever.
+  requestChain = run.catch(() => {});
+  return run;
+}
+
 async function request(path, { method = "GET", params, body } = {}) {
   const apiKey = requireApiKey();
   const qs = params ? `?${new URLSearchParams(Object.entries(params).filter(([, v]) => v != null))}` : "";
-  const res = await fetch(`${BASE_URL}${path}${qs}`, {
-    method,
-    headers: {
-      "x-api-key": apiKey,
-      accept: "application/json",
-      ...(body ? { "content-type": "application/json" } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
+  return throttled(async () => {
+    const res = await fetch(`${BASE_URL}${path}${qs}`, {
+      method,
+      signal: AbortSignal.timeout(20000),
+      headers: {
+        "x-api-key": apiKey,
+        accept: "application/json",
+        ...(body ? { "content-type": "application/json" } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) throw new Error(`OpenSea API error ${res.status} on ${path}: ${await res.text()}`);
+    return res.json();
   });
-  if (!res.ok) throw new Error(`OpenSea API error ${res.status} on ${path}: ${await res.text()}`);
-  return res.json();
 }
 
 // OpenSea's chain slugs differ from this bot's own chain keys in general
