@@ -7,5 +7,7 @@
   "requireSafelistedOrVerified": false,
   "blockMalicious": true,
   "minRiskScore": 0,
-  "minCopyTradeBuyEth": 0
+  "minCopyTradeBuyEth": 0,
+  "minWalletSignals": 0,
+  "minWalletWinRatePercent": 0
 }

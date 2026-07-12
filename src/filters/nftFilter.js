@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getCollectionStats } from "../risk/opensea.js";
 import { getDataDir, seedFileIfMissing } from "../dataDir.js";
+import { getWalletTrackRecord } from "../store/db.js";
 
 const filtersPath = path.join(getDataDir(), "nftFilters.json");
 
@@ -46,7 +47,7 @@ export async function checkFreshFloorPrice(slug) {
 // there and those checks are meaningful. Ownership/verification/risk-score
 // checks come from mint/deploy-time data either way, so those stay
 // unconditional.
-export function applyNftFilter(riskResult, { source, triggerBuyPriceEth } = {}) {
+export function applyNftFilter(riskResult, { source, triggerBuyPriceEth, triggerWalletAddress } = {}) {
   const filters = loadNftFilters();
   const reasons = [];
   const { security, stats, collection, totalSupply, score } = riskResult;
@@ -72,6 +73,23 @@ export function applyNftFilter(riskResult, { source, triggerBuyPriceEth } = {}) 
   if (source === "copy_trade" && filters.minCopyTradeBuyEth > 0 && triggerBuyPriceEth != null) {
     if (triggerBuyPriceEth < filters.minCopyTradeBuyEth) {
       reasons.push(`Copy-trade buy-in ${triggerBuyPriceEth} ETH below minimum ${filters.minCopyTradeBuyEth} ETH — too small to treat as a signal`);
+    }
+  }
+
+  // Wallet track-record gate — only meaningful once a wallet has enough
+  // *resolved* signals (see nftOutcomeTracker.js) to say anything; a wallet
+  // with fewer than minWalletSignals passes through untouched rather than
+  // being auto-rejected for having no history yet — the whole point of
+  // tracking is to let a new wallet earn a track record, not lock it out
+  // before it can build one. Both fields default to 0 (no-op) since there's
+  // no history to gate on until the tracker has run for a while.
+  if (source === "copy_trade" && triggerWalletAddress && (filters.minWalletSignals > 0 || filters.minWalletWinRatePercent > 0)) {
+    const record = getWalletTrackRecord(triggerWalletAddress);
+    if (record.signals >= filters.minWalletSignals) {
+      const winRatePct = (record.winRate ?? 0) * 100;
+      if (winRatePct < filters.minWalletWinRatePercent) {
+        reasons.push(`Wallet's copy-trade win rate ${winRatePct.toFixed(0)}% below minimum ${filters.minWalletWinRatePercent}% (${record.signals} tracked signals)`);
+      }
     }
   }
 

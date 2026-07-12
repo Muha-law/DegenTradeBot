@@ -30,6 +30,7 @@ import {
   getWatchedWallets,
   addWatchedWallet,
   removeWatchedWallet,
+  getAllWalletTrackRecords,
   getNftPaperTradingStats,
   getNftRealTradingStats,
   getOpenNftPaperTrades,
@@ -427,8 +428,57 @@ function nftFilterKeyboard(filters) {
   return Markup.inlineKeyboard(rows);
 }
 
-function nftWalletsKeyboard(wallets) {
-  const rows = wallets.map((w) => [Markup.button.callback(`🗑 ${w.label || w.address.slice(0, 10) + "…"}`, `nftwalletremove:${w.address}`)]);
+// Fits comfortably under Telegram's message/keyboard limits even with a
+// real bulk-imported watchlist (this bot has had 95+ wallets loaded at
+// once) — each row needs both a text line and its own remove button, so
+// this stays well under WATCHLIST_PAGE_SIZE (20), which only needs page-nav
+// buttons, not one button per entry.
+const WALLETS_PAGE_SIZE = 12;
+
+// Sorts every watched wallet by its copy-trade track record (best average
+// return first — see nftOutcomeTracker.js/getAllWalletTrackRecords) and
+// slices to one page. Text and keyboard are built from the same slice so
+// a remove button always matches the row next to it, even mid-pagination.
+function pageWatchedWallets(wallets, offset) {
+  const records = getAllWalletTrackRecords();
+  const withRecords = wallets.map((w) => ({ wallet: w, record: records.get(w.address) || { signals: 0, avgPct: null, winRate: null } }));
+  withRecords.sort((a, b) => (b.record.avgPct ?? -Infinity) - (a.record.avgPct ?? -Infinity));
+  return { shown: withRecords.slice(offset, offset + WALLETS_PAGE_SIZE), total: wallets.length };
+}
+
+// "Copy-trading intelligence" — each wallet's track record, not just its
+// label. A signal is only resolved 24h after the call (nftOutcomeTracker.js),
+// so a freshly-added wallet has no data yet; shown as such rather than a
+// misleading "0% win rate."
+function renderWatchedWalletsText(shown, total, offset) {
+  if (total === 0) {
+    return "👛 *Watched Wallets*\n\nNone yet — tap Add Wallet to start copy-trading a wallet's NFT buys.";
+  }
+  const lines = shown.map(({ wallet: w, record }) => {
+    const label = escapeMd(w.label) || `\`${w.address.slice(0, 10)}…\``;
+    if (record.signals === 0) return `⚪️ ${label} — no resolved signals yet`;
+    const winRatePct = record.winRate * 100;
+    const dot = winRatePct >= 50 ? "🟢" : "🔴";
+    const avgLabel = record.avgPct >= 0 ? `+${record.avgPct.toFixed(1)}%` : `${record.avgPct.toFixed(1)}%`;
+    return `${dot} ${label} — ${record.signals} signal${record.signals === 1 ? "" : "s"} · ${winRatePct.toFixed(0)}% win · avg ${avgLabel}`;
+  });
+  const rangeLabel = total > WALLETS_PAGE_SIZE ? ` — showing ${offset + 1}-${offset + shown.length}, sorted by track record` : "";
+
+  return [
+    `👛 *Watched Wallets* (${total})${rangeLabel}`,
+    "",
+    "Copy-trade signals fire when one of these buys an NFT. Track record = how the collection's floor moved 24h after each past signal.",
+    "",
+    lines.join("\n"),
+  ].join("\n");
+}
+
+function nftWalletsKeyboard(shown, total, offset) {
+  const rows = shown.map(({ wallet: w }) => [Markup.button.callback(`🗑 ${w.label || w.address.slice(0, 10) + "…"}`, `nftwalletremove:${w.address}:${offset}`)]);
+  const navRow = [];
+  if (offset > 0) navRow.push(Markup.button.callback("⬅️ Previous", `nftwalletspage:${Math.max(0, offset - WALLETS_PAGE_SIZE)}`));
+  if (offset + WALLETS_PAGE_SIZE < total) navRow.push(Markup.button.callback("➡️ Show More", `nftwalletspage:${offset + WALLETS_PAGE_SIZE}`));
+  if (navRow.length) rows.push(navRow);
   rows.push([Markup.button.callback("➕ Add Wallet", "nftwalletadd")]);
   rows.push([Markup.button.callback("🔙 NFTs", "menu:nft")]);
   return Markup.inlineKeyboard(rows);
@@ -1094,10 +1144,10 @@ async function handlePendingAction(ctx, pending, text, digestControls) {
     }
     const label = labelParts.join(" ") || resolved.label;
     addWatchedWallet(resolved.address, label);
-    const wallets = getWatchedWallets();
+    const { shown, total } = pageWatchedWallets(getWatchedWallets(), 0);
     return ctx.reply(`👛 Now watching \`${resolved.address}\`${label ? ` (${escapeMd(label)})` : ""}`, {
       parse_mode: "Markdown",
-      ...nftWalletsKeyboard(wallets),
+      ...nftWalletsKeyboard(shown, total, 0),
     });
   }
 
@@ -1824,11 +1874,16 @@ export function createBot(stats, chainControls, digestControls) {
   bot.action("menu:nftwallets", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireOpensea(ctx)) return;
-    const wallets = getWatchedWallets();
-    const text = wallets.length
-      ? `👛 *Watched Wallets* (${wallets.length})\n\nCopy-trade signals fire when one of these buys an NFT.`
-      : "👛 *Watched Wallets*\n\nNone yet — tap Add Wallet to start copy-trading a wallet's NFT buys.";
-    await safeEdit(ctx, text, nftWalletsKeyboard(wallets));
+    const { shown, total } = pageWatchedWallets(getWatchedWallets(), 0);
+    await safeEdit(ctx, renderWatchedWalletsText(shown, total, 0), nftWalletsKeyboard(shown, total, 0));
+  });
+
+  bot.action(/^nftwalletspage:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireOpensea(ctx)) return;
+    const offset = Number(ctx.match[1]);
+    const { shown, total } = pageWatchedWallets(getWatchedWallets(), offset);
+    await safeEdit(ctx, renderWatchedWalletsText(shown, total, offset), nftWalletsKeyboard(shown, total, offset));
   });
 
   bot.action("nftwalletadd", async (ctx) => {
@@ -1841,16 +1896,20 @@ export function createBot(stats, chainControls, digestControls) {
     );
   });
 
-  bot.action(/^nftwalletremove:(.+)$/, async (ctx) => {
+  bot.action(/^nftwalletremove:(0x[a-fA-F0-9]{40}):(\d+)$/, async (ctx) => {
     if (!isAdmin(ctx)) {
       await ctx.answerCbQuery("Not authorized.");
       return;
     }
-    const address = ctx.match[1];
+    const [, address, offsetStr] = ctx.match;
     const removed = removeWatchedWallet(address);
     await ctx.answerCbQuery(removed ? "Removed." : "Not found.");
+    // Stay on the same page after removing — re-clamped in case removing
+    // the last wallet on the last page would otherwise show an empty page.
     const wallets = getWatchedWallets();
-    await safeEdit(ctx, `👛 *Watched Wallets* (${wallets.length})`, nftWalletsKeyboard(wallets));
+    const offset = Math.min(Number(offsetStr), Math.max(0, wallets.length - 1));
+    const { shown, total } = pageWatchedWallets(wallets, offset);
+    await safeEdit(ctx, renderWatchedWalletsText(shown, total, offset), nftWalletsKeyboard(shown, total, offset));
   });
 
   bot.action("menu:nftpapertrading", async (ctx) => {

@@ -289,6 +289,17 @@ addColumnIfMissing("real_trades", "price_unavailable_since", "INTEGER");
 // fetch already happening in the checker loops, no new column needed).
 addColumnIfMissing("paper_trades", "entry_market_cap_usd", "REAL");
 addColumnIfMissing("real_trades", "entry_market_cap_usd", "REAL");
+// Post-call outcome snapshot — how did this collection's floor price move
+// in the 24h after the call, checked by nftOutcomeTracker.js. Powers the
+// per-wallet copy-trade track record (getWalletTrackRecord below): a
+// wallet's signals are only as good as what happened afterward, and this
+// is the ground truth that gets aggregated per trigger_wallet_address.
+// outcome_pct is left null (not computed) when call_floor_price_eth was
+// 0/unknown at call time (typical for a new_collection call with no market
+// yet) — a percent change from zero is undefined, not just small.
+addColumnIfMissing("called_nft_collections", "outcome_checked_at", "INTEGER");
+addColumnIfMissing("called_nft_collections", "outcome_floor_eth", "REAL");
+addColumnIfMissing("called_nft_collections", "outcome_pct", "REAL");
 
 export function hasSeenPair(chain, pairAddress) {
   return !!db
@@ -725,6 +736,62 @@ export function recordNftCall(entry) {
 
 export function countCalledNft() {
   return db.prepare("SELECT COUNT(*) AS n FROM called_nft_collections").get().n;
+}
+
+// --- Copy-trade wallet track record — see the outcome_* column comment
+// above for the mechanism. "Pending" means old enough to check (called
+// before the cutoff) and not yet checked; only rows with a real call-time
+// floor price are eligible (outcome_pct can't be computed from zero).
+export function getNftCallsPendingOutcome(calledBefore) {
+  return db
+    .prepare(
+      `SELECT * FROM called_nft_collections
+       WHERE outcome_checked_at IS NULL AND called_at <= ? AND call_floor_price_eth > 0 AND collection_slug IS NOT NULL`
+    )
+    .all(calledBefore);
+}
+
+export function recordNftCallOutcome(id, { outcomeFloorEth, outcomePct }) {
+  db.prepare("UPDATE called_nft_collections SET outcome_checked_at = ?, outcome_floor_eth = ?, outcome_pct = ? WHERE id = ?").run(
+    Date.now(),
+    outcomeFloorEth,
+    outcomePct,
+    id
+  );
+}
+
+// One wallet's aggregate copy-trade track record — only counts calls with
+// a resolved outcome (outcome_checked_at set). Null fields (not "0 signals
+// yet") when nothing has resolved, so callers can tell "no data" apart
+// from "0% win rate."
+export function getWalletTrackRecord(walletAddress) {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) n, AVG(outcome_pct) avgPct, SUM(CASE WHEN outcome_pct > 0 THEN 1 ELSE 0 END) wins
+       FROM called_nft_collections
+       WHERE trigger_wallet_address = ? AND outcome_checked_at IS NOT NULL AND outcome_pct IS NOT NULL`
+    )
+    .get(walletAddress.toLowerCase());
+  if (!row || row.n === 0) return { signals: 0, avgPct: null, winRate: null };
+  return { signals: row.n, avgPct: row.avgPct, winRate: row.wins / row.n };
+}
+
+// All watched wallets' track records in one query (grouped) — used by the
+// Watched Wallets list so it doesn't run one query per wallet.
+export function getAllWalletTrackRecords() {
+  const rows = db
+    .prepare(
+      `SELECT trigger_wallet_address AS address, COUNT(*) n, AVG(outcome_pct) avgPct, SUM(CASE WHEN outcome_pct > 0 THEN 1 ELSE 0 END) wins
+       FROM called_nft_collections
+       WHERE trigger_wallet_address IS NOT NULL AND outcome_checked_at IS NOT NULL AND outcome_pct IS NOT NULL
+       GROUP BY trigger_wallet_address`
+    )
+    .all();
+  const map = new Map();
+  for (const row of rows) {
+    map.set(row.address, { signals: row.n, avgPct: row.avgPct, winRate: row.wins / row.n });
+  }
+  return map;
 }
 
 export function getWatchedWallets() {

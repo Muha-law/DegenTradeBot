@@ -18,6 +18,7 @@ import { evaluateNftCollection } from "./nftPipeline.js";
 import { startNftBuyRecheckQueue } from "./nftBuyRecheckQueue.js";
 import { startNftPaperTradeChecker } from "./nftPaperTrading.js";
 import { startNftRealTradeChecker } from "./nftRealTrading.js";
+import { startNftOutcomeTracker } from "./nftOutcomeTracker.js";
 import { getNftChainDefs } from "./nftChains.js";
 
 // Last line of defense: an async failure anywhere that isn't already
@@ -151,6 +152,7 @@ if (config.openseaApiKey) {
   startNftBuyRecheckQueue(bot);
   startNftPaperTradeChecker(bot);
   startNftRealTradeChecker(bot);
+  startNftOutcomeTracker();
 } else {
   console.log("[nft] OPENSEA_API_KEY not set — NFT features disabled");
 }

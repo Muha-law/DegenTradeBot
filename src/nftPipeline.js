@@ -19,7 +19,11 @@ export async function evaluateNftCollection(bot, { chain, contractAddress, sourc
   }
 
   const riskResult = await computeNftRiskScore(chain, contractAddress);
-  const { pass, reasons } = applyNftFilter(riskResult, { source, triggerBuyPriceEth: triggerWallet?.buyPriceEth });
+  const { pass, reasons } = applyNftFilter(riskResult, {
+    source,
+    triggerBuyPriceEth: triggerWallet?.buyPriceEth,
+    triggerWalletAddress: triggerWallet?.address,
+  });
 
   if (riskResult.deployerAddress) {
     recordDeployerOutcome(riskResult.deployerAddress, { lowScore: riskResult.score < 40 });
