@@ -327,6 +327,8 @@ async function requireRealTradingUnlock(ctx) {
 
 function mainMenuKeyboard() {
   const paused = isPaused();
+  const tokenRealEnabled = loadRealTradingSettings().enabled;
+  const nftRealEnabled = config.openseaApiKey ? loadNftRealTradingSettings().enabled : false;
   return Markup.inlineKeyboard([
     [Markup.button.callback(paused ? "▶️ Bot: OFF (tap to turn on)" : "⏸ Bot: ON (tap to turn off)", "menu:toggleBot")],
     [Markup.button.callback("📊 Status", "menu:status"), Markup.button.callback("📋 Tracklist", "menu:tracklist")],
@@ -334,7 +336,16 @@ function mainMenuKeyboard() {
     [Markup.button.callback("🔍 Score Token", "menu:score"), Markup.button.callback("📌 Track Token", "menu:track")],
     [Markup.button.callback("🗑 Untrack Token", "menu:untrack"), Markup.button.callback("⛓ Chains", "menu:chains")],
     [Markup.button.callback("📈 Paper Trading", "menu:papertrading")],
-    [Markup.button.callback("💰 Real Funds Trading", "menu:realtrading")],
+    // Separate, individually-labeled real-trading entry points for tokens
+    // vs NFTs — each still opens its own submenu where the actual
+    // enable/pause action lives (passcode-locked, confirm-before-enabling),
+    // this just makes each asset class's live/off status visible and
+    // reachable directly from the home menu instead of NFT's being nested
+    // two taps deep under the NFTs menu.
+    [Markup.button.callback(`💰 Real Trading — Tokens: ${tokenRealEnabled ? "🔴 LIVE" : "⚪️ off"}`, "menu:realtrading")],
+    ...(config.openseaApiKey
+      ? [[Markup.button.callback(`🖼 Real Trading — NFTs: ${nftRealEnabled ? "🔴 LIVE" : "⚪️ off"}`, "menu:nftrealtrading")]]
+      : []),
     [Markup.button.callback("💳 Wallet Balance", "menu:walletbalance"), Markup.button.callback("📊 Bot Stats", "menu:botstats")],
     ...(config.openseaApiKey ? [[Markup.button.callback("🖼 NFTs", "menu:nft")]] : []),
   ]);
