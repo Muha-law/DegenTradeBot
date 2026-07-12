@@ -1,5 +1,6 @@
 import { Wallet, JsonRpcProvider, formatEther } from "ethers";
 import { config } from "./config.js";
+import { CHAINS } from "./chains.js";
 
 // Per-chain HTTP providers, built lazily and cached. Real trading needs
 // eth_sendRawTransaction (write), which the existing per-chain WSS RPCs
@@ -43,4 +44,16 @@ export async function getNativeBalance(chain) {
   if (!wallet) return null;
   const raw = await getProvider(chain).getBalance(wallet.address);
   return Number(formatEther(raw));
+}
+
+// ENS resolution always goes through Ethereum mainnet (the ENS registry
+// lives there, regardless of which chain the resolved address is later
+// watched/traded on — an address is the same across every EVM chain). Used
+// by the NFT wallet-copy-trade "Add Wallet" flow so a watched wallet can be
+// entered as a human-readable .eth name instead of a raw address. Returns
+// null (not a throw) if the name doesn't resolve, so callers can give a
+// clean "couldn't resolve that name" reply instead of a stack trace.
+export async function resolveEnsName(name) {
+  const provider = getProvider({ key: "ethereum", ...CHAINS.ethereum });
+  return provider.resolveName(name.toLowerCase()).catch(() => null);
 }

@@ -40,7 +40,7 @@ import { loadDigestSettings, saveDigestSettings } from "../digestSettings.js";
 import { loadPresets, applyPreset } from "../presets.js";
 import { loadPaperTradingSettings, savePaperTradingSettings } from "../paperTradingSettings.js";
 import { loadRealTradingSettings, saveRealTradingSettings } from "../realTradingSettings.js";
-import { hasWallet, getWalletAddress, getNativeBalance } from "../wallet.js";
+import { hasWallet, getWalletAddress, getNativeBalance, resolveEnsName } from "../wallet.js";
 import { sellToken, buyTokenWithNativeAmount, withSlippageRetry } from "../execution/swapExecutor.js";
 import { estimateV2PriceImpact } from "../risk/priceImpact.js";
 import { renderOpenCard, renderCloseCard } from "./tradeCard.js";
@@ -256,7 +256,25 @@ async function closeAllOpenRealTrades(settings) {
 }
 
 const ADDRESS_RE = /0x[a-fA-F0-9]{40}/;
+const ENS_RE = /^[a-z0-9-]+(\.[a-z0-9-]+)*\.eth$/i;
 const PENDING_TTL_MS = 5 * 60 * 1000;
+
+// Accepts either a raw 0x address or an ENS .eth name — shared by every
+// "add a watched wallet" entry point (the Add Wallet button flow and the
+// /watchwallet command) so both take the same input formats. Returns null
+// if the input is neither a valid address nor a resolvable ENS name. When
+// resolved from a name, that name is returned as the suggested label —
+// nicer than a truncated hex address in the Watched Wallets list, and the
+// caller only overrides it if the user typed an explicit label too.
+async function resolveWalletAddressInput(input) {
+  if (ADDRESS_RE.test(input)) return { address: input, label: null };
+  if (ENS_RE.test(input)) {
+    const resolved = await resolveEnsName(input);
+    if (!resolved) return null;
+    return { address: resolved, label: input };
+  }
+  return null;
+}
 
 // Tracks "what is this chat's next plain-text message for" after a button
 // prompt (e.g. "paste an address to track"), so free text can be routed
@@ -1017,13 +1035,15 @@ async function handlePendingAction(ctx, pending, text, digestControls) {
   }
 
   if (pending.type === "nftWalletAdd") {
-    const [rawAddress, ...labelParts] = text.trim().split(/\s+/);
-    if (!ADDRESS_RE.test(rawAddress)) {
-      return ctx.reply("That doesn't look like a valid wallet address — tap Add Wallet again to retry.");
+    const [rawInput, ...labelParts] = text.trim().split(/\s+/);
+    const resolved = await resolveWalletAddressInput(rawInput);
+    if (!resolved) {
+      return ctx.reply("That doesn't look like a valid wallet address or resolvable ENS name — tap Add Wallet again to retry.");
     }
-    addWatchedWallet(rawAddress, labelParts.join(" ") || null);
+    const label = labelParts.join(" ") || resolved.label;
+    addWatchedWallet(resolved.address, label);
     const wallets = getWatchedWallets();
-    return ctx.reply(`👛 Now watching \`${rawAddress}\`${labelParts.length ? ` (${labelParts.join(" ")})` : ""}`, {
+    return ctx.reply(`👛 Now watching \`${resolved.address}\`${label ? ` (${escapeMd(label)})` : ""}`, {
       parse_mode: "Markdown",
       ...nftWalletsKeyboard(wallets),
     });
@@ -1763,7 +1783,10 @@ export function createBot(stats, chainControls, digestControls) {
     await ctx.answerCbQuery();
     if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
     setPending(ctx.chat.id, { type: "nftWalletAdd" });
-    await ctx.reply("Send the wallet address to watch, optionally followed by a label — e.g. `0xabc... whale1`", { parse_mode: "Markdown" });
+    await ctx.reply(
+      "Send the wallet address or ENS name (`name.eth`) to watch, optionally followed by a label — e.g. `0xabc... whale1` or `vitalik.eth`",
+      { parse_mode: "Markdown" }
+    );
   });
 
   bot.action(/^nftwalletremove:(.+)$/, async (ctx) => {
@@ -1985,12 +2008,15 @@ export function createBot(stats, chainControls, digestControls) {
       ctx.reply(`Failed to score collection: ${err.message}`);
     }
   });
-  bot.command("watchwallet", (ctx) => {
+  bot.command("watchwallet", async (ctx) => {
     if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
-    const [, address, ...labelParts] = ctx.message.text.split(/\s+/);
-    if (!address || !ADDRESS_RE.test(address)) return ctx.reply("Usage: /watchwallet <address> [label]");
-    addWatchedWallet(address, labelParts.join(" ") || null);
-    ctx.reply(`👛 Now watching \`${address}\``, { parse_mode: "Markdown" });
+    const [, rawInput, ...labelParts] = ctx.message.text.split(/\s+/);
+    if (!rawInput) return ctx.reply("Usage: /watchwallet <address or name.eth> [label]");
+    const resolved = await resolveWalletAddressInput(rawInput);
+    if (!resolved) return ctx.reply("That doesn't look like a valid wallet address or resolvable ENS name.");
+    const label = labelParts.join(" ") || resolved.label;
+    addWatchedWallet(resolved.address, label);
+    ctx.reply(`👛 Now watching \`${resolved.address}\`${label ? ` (${escapeMd(label)})` : ""}`, { parse_mode: "Markdown" });
   });
   bot.command("unwatchwallet", (ctx) => {
     if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
