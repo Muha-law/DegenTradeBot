@@ -125,6 +125,120 @@ db.exec(`
     first_seen_at INTEGER NOT NULL,
     last_seen_at INTEGER NOT NULL
   );
+
+  -- --- NFT tables (mirror the token tables above, but keyed by
+  -- contract_address (+ token_id where the row is a specific item, not a
+  -- whole collection) since NFTs aren't fungible the way ERC20s are). ---
+
+  CREATE TABLE IF NOT EXISTS seen_nft_collections (
+    chain TEXT NOT NULL,
+    contract_address TEXT NOT NULL,
+    first_seen_at INTEGER NOT NULL,
+    PRIMARY KEY (chain, contract_address)
+  );
+
+  CREATE TABLE IF NOT EXISTS called_nft_collections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chain TEXT NOT NULL,
+    contract_address TEXT NOT NULL,
+    collection_slug TEXT,
+    name TEXT,
+    image_url TEXT,
+    call_floor_price_eth REAL,
+    call_volume24h_eth REAL,
+    call_num_owners INTEGER,
+    call_total_supply INTEGER,
+    risk_score INTEGER,
+    risk_grade TEXT,
+    source TEXT NOT NULL,
+    trigger_wallet_address TEXT,
+    telegram_message_id INTEGER,
+    called_at INTEGER NOT NULL,
+    UNIQUE(chain, contract_address)
+  );
+
+  -- Dedup for the wallet copy-trade watcher — a wallet's own sale event
+  -- (tx_hash) is the natural unique key; wallet_address/contract_address are
+  -- kept alongside it purely for querying, not uniqueness.
+  CREATE TABLE IF NOT EXISTS nft_copy_signals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    wallet_address TEXT NOT NULL,
+    contract_address TEXT NOT NULL,
+    token_id TEXT,
+    tx_hash TEXT NOT NULL,
+    detected_at INTEGER NOT NULL,
+    UNIQUE(tx_hash, wallet_address, contract_address)
+  );
+
+  CREATE TABLE IF NOT EXISTS watched_wallets (
+    address TEXT PRIMARY KEY,
+    label TEXT,
+    added_at INTEGER NOT NULL
+  );
+
+  -- "Called but no fulfillable secondary-market listing existed yet" queue —
+  -- same lifecycle as pending_tokens, retried by a recheck loop until a
+  -- listing appears or the attempt window expires.
+  CREATE TABLE IF NOT EXISTS nft_pending_listings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chain TEXT NOT NULL,
+    contract_address TEXT NOT NULL,
+    called_at INTEGER NOT NULL,
+    last_checked_at INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(chain, contract_address)
+  );
+
+  CREATE TABLE IF NOT EXISTS nft_paper_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chain TEXT NOT NULL,
+    contract_address TEXT NOT NULL,
+    token_id TEXT NOT NULL,
+    collection_slug TEXT,
+    name TEXT,
+    entry_price_eth REAL NOT NULL,
+    target_multiple REAL NOT NULL,
+    stop_floor_pct REAL NOT NULL,
+    entry_at INTEGER NOT NULL,
+    last_checked_at INTEGER,
+    listed_price_eth REAL,
+    listed_at INTEGER,
+    exit_price_eth REAL,
+    exit_at INTEGER,
+    exit_reason TEXT,
+    pnl_eth REAL,
+    pnl_pct REAL,
+    status TEXT NOT NULL DEFAULT 'open',
+    UNIQUE(chain, contract_address, token_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS nft_real_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chain TEXT NOT NULL,
+    contract_address TEXT NOT NULL,
+    token_id TEXT NOT NULL,
+    collection_slug TEXT,
+    name TEXT,
+    entry_price_eth REAL NOT NULL,
+    target_multiple REAL NOT NULL,
+    stop_floor_pct REAL NOT NULL,
+    entry_at INTEGER NOT NULL,
+    last_checked_at INTEGER,
+    listed_price_eth REAL,
+    listed_at INTEGER,
+    listing_order_hash TEXT,
+    exit_price_eth REAL,
+    exit_at INTEGER,
+    exit_reason TEXT,
+    pnl_eth REAL,
+    pnl_pct REAL,
+    status TEXT NOT NULL DEFAULT 'open',
+    entry_tx_hash TEXT,
+    entry_gas_eth REAL,
+    exit_tx_hash TEXT,
+    exit_gas_eth REAL,
+    UNIQUE(chain, contract_address, token_id)
+  );
 `);
 
 // Lightweight migration: add columns to an existing called_tokens table
@@ -566,4 +680,200 @@ export function recordBotUser(telegramUserId) {
 
 export function countBotUsers() {
   return db.prepare("SELECT COUNT(*) AS n FROM bot_users").get().n;
+}
+
+// --- NFT: collection dedup, calls, watched wallets, copy-signal dedup,
+// pending-listing recheck queue, paper/real trades. Same conventions as the
+// token functions above — see the table comments in the schema block.
+
+export function hasSeenNftCollection(chain, contractAddress) {
+  return !!db.prepare("SELECT 1 FROM seen_nft_collections WHERE chain = ? AND contract_address = ?").get(chain, contractAddress);
+}
+
+export function markNftCollectionSeen(chain, contractAddress) {
+  db.prepare("INSERT OR IGNORE INTO seen_nft_collections (chain, contract_address, first_seen_at) VALUES (?, ?, ?)").run(
+    chain,
+    contractAddress,
+    Date.now()
+  );
+}
+
+export function hasBeenCalledNft(chain, contractAddress) {
+  return !!db.prepare("SELECT 1 FROM called_nft_collections WHERE chain = ? AND contract_address = ?").get(chain, contractAddress);
+}
+
+export function recordNftCall(entry) {
+  const stmt = db.prepare(`
+    INSERT INTO called_nft_collections
+      (chain, contract_address, collection_slug, name, image_url, call_floor_price_eth,
+       call_volume24h_eth, call_num_owners, call_total_supply, risk_score, risk_grade,
+       source, trigger_wallet_address, telegram_message_id, called_at)
+    VALUES (@chain, @contractAddress, @collectionSlug, @name, @imageUrl, @callFloorPriceEth,
+       @callVolume24hEth, @callNumOwners, @callTotalSupply, @riskScore, @riskGrade,
+       @source, @triggerWalletAddress, @telegramMessageId, @calledAt)
+    ON CONFLICT(chain, contract_address) DO NOTHING
+  `);
+  return stmt.run(entry);
+}
+
+export function countCalledNft() {
+  return db.prepare("SELECT COUNT(*) AS n FROM called_nft_collections").get().n;
+}
+
+export function getWatchedWallets() {
+  return db.prepare("SELECT * FROM watched_wallets ORDER BY added_at ASC").all();
+}
+
+export function addWatchedWallet(address, label) {
+  db.prepare(
+    `INSERT INTO watched_wallets (address, label, added_at) VALUES (?, ?, ?)
+     ON CONFLICT(address) DO UPDATE SET label = excluded.label`
+  ).run(address.toLowerCase(), label || null, Date.now());
+}
+
+export function removeWatchedWallet(address) {
+  const res = db.prepare("DELETE FROM watched_wallets WHERE address = ?").run(address.toLowerCase());
+  return res.changes > 0;
+}
+
+export function hasNftCopySignal(txHash, walletAddress, contractAddress) {
+  return !!db
+    .prepare("SELECT 1 FROM nft_copy_signals WHERE tx_hash = ? AND wallet_address = ? AND contract_address = ?")
+    .get(txHash, walletAddress, contractAddress);
+}
+
+export function recordNftCopySignal({ walletAddress, contractAddress, tokenId, txHash }) {
+  db.prepare(
+    `INSERT OR IGNORE INTO nft_copy_signals (wallet_address, contract_address, token_id, tx_hash, detected_at)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(walletAddress, contractAddress, tokenId ?? null, txHash, Date.now());
+}
+
+export function addNftPendingListing({ chain, contractAddress, calledAt }) {
+  db.prepare(
+    `INSERT OR IGNORE INTO nft_pending_listings (chain, contract_address, called_at, last_checked_at, attempts)
+     VALUES (?, ?, ?, ?, 0)`
+  ).run(chain, contractAddress, calledAt, calledAt);
+}
+
+export function getAllNftPendingListings() {
+  return db.prepare("SELECT * FROM nft_pending_listings").all();
+}
+
+export function touchNftPendingListing(id) {
+  db.prepare("UPDATE nft_pending_listings SET last_checked_at = ?, attempts = attempts + 1 WHERE id = ?").run(Date.now(), id);
+}
+
+export function removeNftPendingListing(id) {
+  db.prepare("DELETE FROM nft_pending_listings WHERE id = ?").run(id);
+}
+
+export function openNftPaperTrade(entry) {
+  const stmt = db.prepare(`
+    INSERT INTO nft_paper_trades
+      (chain, contract_address, token_id, collection_slug, name, entry_price_eth,
+       target_multiple, stop_floor_pct, entry_at, last_checked_at, status)
+    VALUES (@chain, @contractAddress, @tokenId, @collectionSlug, @name, @entryPriceEth,
+       @targetMultiple, @stopFloorPct, @entryAt, @entryAt, 'open')
+    ON CONFLICT(chain, contract_address, token_id) DO NOTHING
+  `);
+  return stmt.run(entry);
+}
+
+export function getOpenNftPaperTrades() {
+  return db.prepare("SELECT * FROM nft_paper_trades WHERE status IN ('open', 'listed')").all();
+}
+
+export function markNftPaperTradeListed(id, { listedPriceEth, listedAt }) {
+  db.prepare("UPDATE nft_paper_trades SET status = 'listed', listed_price_eth = ?, listed_at = ?, last_checked_at = ? WHERE id = ?").run(
+    listedPriceEth,
+    listedAt,
+    listedAt,
+    id
+  );
+}
+
+export function touchNftPaperTrade(id) {
+  db.prepare("UPDATE nft_paper_trades SET last_checked_at = ? WHERE id = ?").run(Date.now(), id);
+}
+
+export function closeNftPaperTrade(id, { exitPriceEth, exitReason, pnlEth, pnlPct }) {
+  db.prepare(
+    `UPDATE nft_paper_trades
+     SET status = 'closed', exit_price_eth = ?, exit_at = ?, exit_reason = ?, pnl_eth = ?, pnl_pct = ?, last_checked_at = ?
+     WHERE id = ?`
+  ).run(exitPriceEth, Date.now(), exitReason, pnlEth, pnlPct, Date.now(), id);
+}
+
+export function getNftPaperTradingStats() {
+  const open = db.prepare("SELECT COUNT(*) n, COALESCE(SUM(entry_price_eth), 0) deployed FROM nft_paper_trades WHERE status IN ('open', 'listed')").get();
+  const closed = db.prepare("SELECT COUNT(*) n, COALESCE(SUM(pnl_eth), 0) totalPnl FROM nft_paper_trades WHERE status = 'closed'").get();
+  const wins = db.prepare("SELECT COUNT(*) n FROM nft_paper_trades WHERE status = 'closed' AND pnl_pct >= 0").get().n;
+  return {
+    openCount: open.n,
+    deployedEth: open.deployed,
+    closedCount: closed.n,
+    totalPnlEth: closed.totalPnl,
+    wins,
+    winRate: closed.n > 0 ? wins / closed.n : null,
+  };
+}
+
+// --- nft_real_trades: same shape/lifecycle as nft_paper_trades, plus
+// on-chain execution fields (mirrors real_trades vs paper_trades above).
+export function openNftRealTrade(entry) {
+  const stmt = db.prepare(`
+    INSERT INTO nft_real_trades
+      (chain, contract_address, token_id, collection_slug, name, entry_price_eth,
+       target_multiple, stop_floor_pct, entry_at, last_checked_at, status,
+       entry_tx_hash, entry_gas_eth)
+    VALUES (@chain, @contractAddress, @tokenId, @collectionSlug, @name, @entryPriceEth,
+       @targetMultiple, @stopFloorPct, @entryAt, @entryAt, 'open',
+       @entryTxHash, @entryGasEth)
+    ON CONFLICT(chain, contract_address, token_id) DO NOTHING
+  `);
+  return stmt.run(entry);
+}
+
+export function getOpenNftRealTrades() {
+  return db.prepare("SELECT * FROM nft_real_trades WHERE status IN ('open', 'listed')").all();
+}
+
+export function getOpenNftRealTradeByToken(chain, contractAddress, tokenId) {
+  return db
+    .prepare("SELECT * FROM nft_real_trades WHERE chain = ? AND contract_address = ? AND token_id = ? AND status IN ('open', 'listed')")
+    .get(chain, contractAddress, tokenId);
+}
+
+export function markNftRealTradeListed(id, { listedPriceEth, listedAt, listingOrderHash }) {
+  db.prepare(
+    "UPDATE nft_real_trades SET status = 'listed', listed_price_eth = ?, listed_at = ?, listing_order_hash = ?, last_checked_at = ? WHERE id = ?"
+  ).run(listedPriceEth, listedAt, listingOrderHash, listedAt, id);
+}
+
+export function touchNftRealTrade(id) {
+  db.prepare("UPDATE nft_real_trades SET last_checked_at = ? WHERE id = ?").run(Date.now(), id);
+}
+
+export function closeNftRealTrade(id, { exitPriceEth, exitReason, pnlEth, pnlPct, exitTxHash, exitGasEth }) {
+  db.prepare(
+    `UPDATE nft_real_trades
+     SET status = 'closed', exit_price_eth = ?, exit_at = ?, exit_reason = ?, pnl_eth = ?, pnl_pct = ?,
+         last_checked_at = ?, exit_tx_hash = ?, exit_gas_eth = ?
+     WHERE id = ?`
+  ).run(exitPriceEth, Date.now(), exitReason, pnlEth, pnlPct, Date.now(), exitTxHash, exitGasEth, id);
+}
+
+export function getNftRealTradingStats() {
+  const open = db.prepare("SELECT COUNT(*) n, COALESCE(SUM(entry_price_eth), 0) deployed FROM nft_real_trades WHERE status IN ('open', 'listed')").get();
+  const closed = db.prepare("SELECT COUNT(*) n, COALESCE(SUM(pnl_eth), 0) totalPnl FROM nft_real_trades WHERE status = 'closed'").get();
+  const wins = db.prepare("SELECT COUNT(*) n FROM nft_real_trades WHERE status = 'closed' AND pnl_pct >= 0").get().n;
+  return {
+    openCount: open.n,
+    deployedEth: open.deployed,
+    closedCount: closed.n,
+    totalPnlEth: closed.totalPnl,
+    wins,
+    winRate: closed.n > 0 ? wins / closed.n : null,
+  };
 }

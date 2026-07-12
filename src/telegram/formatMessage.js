@@ -398,6 +398,150 @@ export function buildRealTradingSummary({ settings, stats, unrealizedPnlUsd, wal
 // cap, and liquidity, with a totals footer. `walletBalances` follows the
 // same {label, balance, symbol, usdValue} shape as buildRealTradingSummary's
 // — omit/empty for paper trading, which has no real wallet behind it.
+// --- NFT messages — mirror the token-side builders above, but floor price /
+// owners / volume stand in for price / market cap / liquidity, and an extra
+// "listed" state exists between open and closed (see nftTrading.js) that has
+// no token-side equivalent, since exiting means creating a marketplace
+// listing and waiting for a buyer rather than an instant swap.
+
+function fmtEth(n) {
+  if (n == null || !Number.isFinite(n)) return "n/a";
+  if (n === 0) return "0 ETH";
+  if (n < 0.0001) return `${n.toExponential(2)} ETH`;
+  return `${n.toFixed(4)} ETH`;
+}
+
+export function buildNftCallMessage({ chain, contractAddress, riskResult, source, triggerWalletLabel }) {
+  const { score, grade, label, breakdown, flags, name, slug, stats, totalSupply } = riskResult;
+  const explorer = explorerUrlFor(chain.key, contractAddress);
+  const openseaUrl = slug ? `https://opensea.io/collection/${slug}` : null;
+  const sourceTag =
+    source === "copy_trade" ? `👤 *Copy Signal* — ${escapeMd(triggerWalletLabel) || "a watched wallet"} just bought in` : "🆕 *New Collection*";
+
+  const lines = [
+    `📣 *NEW NFT CALL* — ${escapeMd(name) || "Unknown"} on ${chain.label}`,
+    sourceTag,
+    "",
+    `${gradeEmoji[grade]} *Risk Score: ${score}/100 — ${grade} (${label})*`,
+    `  • Contract safety: ${breakdown.contractSafety}/35`,
+    `  • Marketplace liquidity: ${breakdown.marketplaceLiquidity}/25`,
+    `  • Holder distribution: ${breakdown.holderDistribution}/20`,
+    `  • Deployer history: ${breakdown.deployerHistory}/20`,
+    "",
+    `💎 Floor: ${fmtEth(stats?.floorPriceEth)}`,
+    `📊 24h Volume: ${fmtEth(stats?.volume24hEth)}`,
+    `👥 Owners: ${stats?.numOwners ?? "n/a"}${totalSupply ? ` / ${totalSupply} supply` : ""}`,
+  ];
+
+  if (flags.length) {
+    lines.push("", "⚠️ *Flags:*", ...flags.slice(0, 6).map((f) => `  • ${f}`));
+  }
+
+  lines.push(
+    "",
+    `\`${contractAddress}\``,
+    [explorer && `[Explorer](${explorer})`, openseaUrl && `[OpenSea](${openseaUrl})`].filter(Boolean).join(" | ")
+  );
+
+  return lines.join("\n");
+}
+
+export function buildNftPaperTradeOpenMessage({ chain, contractAddress, name, tokenId, entryPriceEth, targetMultiple, stopFloorPct }) {
+  return [
+    `📝 *NFT paper trade opened* — ${escapeMd(name) || "Unknown"} #${tokenId} on ${chain.label}`,
+    `Entry: ${fmtEth(entryPriceEth)}`,
+    `Target: ${targetMultiple}x floor | Stop: ${stopFloorPct}% of entry`,
+    "",
+    `\`${contractAddress}\``,
+  ].join("\n");
+}
+
+export function buildNftRealTradeOpenMessage({ chain, contractAddress, name, tokenId, entryPriceEth, targetMultiple, stopFloorPct, txHash, gasEth }) {
+  const explorer = txExplorerUrls[chain.key]?.(txHash);
+  return [
+    `💰 *REAL NFT trade opened* — ${escapeMd(name) || "Unknown"} #${tokenId} on ${chain.label}`,
+    `Entry: ${fmtEth(entryPriceEth)} | Gas: ${fmtEth(gasEth)}`,
+    `Target: ${targetMultiple}x floor | Stop: ${stopFloorPct}% of entry`,
+    "",
+    `\`${contractAddress}\``,
+    explorer ? `[Transaction](${explorer})` : `Tx: \`${txHash}\``,
+  ].join("\n");
+}
+
+// "Listed for sale, waiting for a buyer" — a real intermediate state with no
+// token-side equivalent (a token exit is one instant swap; an NFT exit is a
+// marketplace order that may sit unfilled for a while, or never fill at the
+// listed price).
+export function buildNftListedMessage({ chain, contractAddress, name, tokenId, listedPriceEth, reason, mode = "paper" }) {
+  const modeLabel = mode === "real" ? "REAL " : "";
+  const reasonLabel = reason === "stop_floor" ? "stop-loss listing" : "take-profit listing";
+  return [
+    `🏷️ *${modeLabel}NFT listed for sale* (${reasonLabel})`,
+    `${escapeMd(name) || "Unknown"} #${tokenId} on ${chain.label}`,
+    `Listed at: ${fmtEth(listedPriceEth)}`,
+    "⏳ Not a guaranteed or instant exit — this waits for a buyer on OpenSea.",
+    "",
+    `\`${contractAddress}\``,
+  ].join("\n");
+}
+
+const NFT_CLOSE_HEADLINES = {
+  take_profit_sold: "🎯 *NFT trade closed — SOLD at target*",
+  stop_loss_sold: "🛑 *NFT trade closed — SOLD at stop*",
+  manual_close: "🛑 *NFT trade closed — manual*",
+};
+
+export function buildNftPaperTradeCloseMessage({ chain, contractAddress, name, tokenId, entryPriceEth, exitPriceEth, pnlEth, pnlPct, exitReason }) {
+  const won = pnlPct >= 0;
+  const headline = NFT_CLOSE_HEADLINES[exitReason] || "⏱ *NFT paper trade closed*";
+  return [
+    headline,
+    `${escapeMd(name) || "Unknown"} #${tokenId} on ${chain.label}`,
+    `${won ? "🟢" : "🔴"} ${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}% (${pnlEth >= 0 ? "+" : ""}${fmtEth(Math.abs(pnlEth))})`,
+    "",
+    `Entry: ${fmtEth(entryPriceEth)} | Exit: ${fmtEth(exitPriceEth)}`,
+    "",
+    `\`${contractAddress}\``,
+  ].join("\n");
+}
+
+export function buildNftRealTradeCloseMessage({ chain, contractAddress, name, tokenId, entryPriceEth, exitPriceEth, pnlEth, pnlPct, exitReason, txHash, gasEth }) {
+  const won = pnlPct >= 0;
+  const headline = (NFT_CLOSE_HEADLINES[exitReason] || "⏱ *NFT trade closed*").replace("NFT trade", "REAL NFT trade");
+  const explorer = txExplorerUrls[chain.key]?.(txHash);
+  return [
+    headline,
+    `${escapeMd(name) || "Unknown"} #${tokenId} on ${chain.label}`,
+    `${won ? "🟢" : "🔴"} ${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}% (${pnlEth >= 0 ? "+" : ""}${fmtEth(Math.abs(pnlEth))})`,
+    `Entry: ${fmtEth(entryPriceEth)} | Exit: ${fmtEth(exitPriceEth)} | Gas: ${fmtEth(gasEth)}`,
+    "",
+    `\`${contractAddress}\``,
+    explorer ? `[Transaction](${explorer})` : `Tx: \`${txHash}\``,
+  ].join("\n");
+}
+
+export function buildNftTradingSummary({ settings, stats, mode = "paper" }) {
+  const modeLabel = mode === "real" ? "💰 *Real NFT Trading*" : "📈 *NFT Paper Trading*";
+  const statusLabel = mode === "real" ? (settings.enabled ? "🔴 LIVE — real money" : "⚪️ off") : settings.enabled ? "🟢 running" : "⏸ paused";
+  const budgetUnit = mode === "real" ? "totalBudgetEth" : "totalBudgetEth";
+  const lines = [
+    modeLabel,
+    "",
+    `Status: ${statusLabel}`,
+    `Budget: ${fmtEth(settings[budgetUnit])} total | ${fmtEth(settings.positionSizeEth)}/item`,
+    `Target: ${settings.targetMultiple}x floor | Stop: ${settings.stopFloorPct}% of entry`,
+    "⚠️ NFT exits list on OpenSea and wait for a buyer — not an instant swap like token trading.",
+    "",
+    `Open/listed positions: ${stats.openCount} (${fmtEth(stats.deployedEth)} deployed)`,
+    `Closed trades: ${stats.closedCount}`,
+  ];
+  if (stats.closedCount > 0) {
+    lines.push(`Win rate: ${(stats.winRate * 100).toFixed(1)}% (${stats.wins}/${stats.closedCount})`);
+    lines.push(`Realized PnL: ${stats.totalPnlEth >= 0 ? "+" : ""}${fmtEth(Math.abs(stats.totalPnlEth))}`);
+  }
+  return lines.join("\n");
+}
+
 export function buildActiveTradesMessage({ trades, totalUnrealizedUsd, walletBalances = [], mode = "paper" }) {
   const modeLabel = mode === "real" ? "Real Funds" : "Paper";
   const showLabel = walletBalances.length > 1;

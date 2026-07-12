@@ -29,6 +29,7 @@ export const config = {
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || null,
   goplusAppKey: process.env.GOPLUS_APP_KEY || null,
   goplusAppSecret: process.env.GOPLUS_APP_SECRET || null,
+  openseaApiKey: process.env.OPENSEA_API_KEY || null,
   walletPrivateKey: process.env.WALLET_PRIVATE_KEY || null,
   realTradingPasscode: process.env.REAL_TRADING_PASSCODE || null,
   priceUpdateIntervalMinutes: Number(process.env.PRICE_UPDATE_INTERVAL_MINUTES || 10),

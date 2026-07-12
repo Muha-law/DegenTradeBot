@@ -18,13 +18,14 @@ import {
   touchRealComando,
   getCalledTokenSnapshot,
 } from "./store/db.js";
-import { postUpdate } from "./telegram/bot.js";
+import { postUpdate, postTradeCard } from "./telegram/bot.js";
 import {
   buildRealTradeOpenMessage,
   buildRealTradeCloseMessage,
   buildRealTradeFailedMessage,
   buildComandoActivatedMessage,
 } from "./telegram/formatMessage.js";
+import { renderOpenCard, renderCloseCard } from "./telegram/tradeCard.js";
 
 const CHECK_CRON = "*/2 * * * *";
 // Same throttle rationale as paper trading's Super Comando — see paperTrading.js.
@@ -155,9 +156,8 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, na
         exitTxHash: sellResult.txHash,
         exitGasUsd: sellResult.gasUsd,
       });
-      await postUpdate(
-        bot,
-        buildRealTradeCloseMessage({
+      await postTradeCard(bot, {
+        caption: buildRealTradeCloseMessage({
           chain,
           tokenAddress,
           name,
@@ -169,8 +169,20 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, na
           exitReason: "honeypot_immediate_exit",
           txHash: sellResult.txHash,
           gasUsd: sellResult.gasUsd,
-        })
-      );
+        }),
+        imageBuffer: renderCloseCard({
+          chainLabel: chain.label,
+          symbol,
+          name,
+          tradeMode: "real",
+          entryPriceUsd: result.entryPriceUsd,
+          exitPriceUsd: 0,
+          pnlUsd,
+          pnlPct,
+          exitReason: "honeypot_immediate_exit",
+          tokenAddress,
+        }),
+      });
     } catch (err) {
       // Expected for a true honeypot — the static-call already predicted
       // this. Leave the position open; the normal 2-minute checker (and the
@@ -181,9 +193,8 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, na
     return;
   }
 
-  await postUpdate(
-    bot,
-    buildRealTradeOpenMessage({
+  await postTradeCard(bot, {
+    caption: buildRealTradeOpenMessage({
       chain,
       tokenAddress,
       name,
@@ -194,8 +205,19 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, na
       stopLossPct: settings.stopLossPct,
       txHash: result.txHash,
       gasUsd: result.gasUsd,
-    })
-  );
+    }),
+    imageBuffer: renderOpenCard({
+      chainLabel: chain.label,
+      symbol,
+      name,
+      tradeMode: "real",
+      entryPriceUsd: result.entryPriceUsd,
+      positionSizeUsd: settings.positionSizeUsd,
+      takeProfitPct: settings.takeProfitPct,
+      stopLossPct: settings.stopLossPct,
+      tokenAddress,
+    }),
+  });
 }
 
 export function startRealTradeChecker(bot) {
@@ -246,9 +268,8 @@ export function startRealTradeChecker(bot) {
               exitTxHash: sellResult.txHash,
               exitGasUsd: sellResult.gasUsd,
             });
-            await postUpdate(
-              bot,
-              buildRealTradeCloseMessage({
+            await postTradeCard(bot, {
+              caption: buildRealTradeCloseMessage({
                 chain,
                 tokenAddress: t.token_address,
                 name: t.name,
@@ -260,8 +281,20 @@ export function startRealTradeChecker(bot) {
                 exitReason: "stale_price_exit",
                 txHash: sellResult.txHash,
                 gasUsd: sellResult.gasUsd,
-              })
-            );
+              }),
+              imageBuffer: renderCloseCard({
+                chainLabel: chain.label,
+                symbol: t.symbol,
+                name: t.name,
+                tradeMode: "real",
+                entryPriceUsd: t.entry_price_usd,
+                exitPriceUsd: 0,
+                pnlUsd,
+                pnlPct: realizedPnlPct,
+                exitReason: "stale_price_exit",
+                tokenAddress: t.token_address,
+              }),
+            });
           } else {
             touchRealTradeStalePrice(t.id);
           }
@@ -333,9 +366,8 @@ export function startRealTradeChecker(bot) {
             exitTxHash: sellResult.txHash,
             exitGasUsd: sellResult.gasUsd,
           });
-          await postUpdate(
-            bot,
-            buildRealTradeCloseMessage({
+          await postTradeCard(bot, {
+            caption: buildRealTradeCloseMessage({
               chain,
               tokenAddress: t.token_address,
               name: t.name,
@@ -347,8 +379,20 @@ export function startRealTradeChecker(bot) {
               exitReason,
               txHash: sellResult.txHash,
               gasUsd: sellResult.gasUsd,
-            })
-          );
+            }),
+            imageBuffer: renderCloseCard({
+              chainLabel: chain.label,
+              symbol: t.symbol,
+              name: t.name,
+              tradeMode: "real",
+              entryPriceUsd: t.entry_price_usd,
+              exitPriceUsd: pair.priceUsd,
+              pnlUsd,
+              pnlPct: realizedPnlPct,
+              exitReason,
+              tokenAddress: t.token_address,
+            }),
+          });
         } else {
           touchRealTrade(t.id);
         }

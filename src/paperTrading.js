@@ -16,8 +16,9 @@ import {
   touchComando,
   getCalledTokenSnapshot,
 } from "./store/db.js";
-import { postUpdate } from "./telegram/bot.js";
+import { postUpdate, postTradeCard } from "./telegram/bot.js";
 import { buildPaperTradeOpenMessage, buildPaperTradeCloseMessage, buildComandoActivatedMessage } from "./telegram/formatMessage.js";
+import { renderOpenCard, renderCloseCard } from "./telegram/tradeCard.js";
 
 const CHECK_CRON = "*/2 * * * *";
 // How often, per trade, Super Comando is allowed to spend an AI call asking
@@ -100,19 +101,28 @@ export async function openPaperTradeIfRoom(bot, { chain, tokenAddress, symbol, n
   });
   if (res.changes === 0) return; // already have an open/closed position for this token
 
-  await postUpdate(
-    bot,
-    buildPaperTradeOpenMessage({
-      chain,
-      tokenAddress,
-      name,
-      symbol,
-      entryPriceUsd: priceUsd,
-      positionSizeUsd: settings.positionSizeUsd,
-      takeProfitPct: settings.takeProfitPct,
-      stopLossPct: settings.stopLossPct,
-    })
-  );
+  const caption = buildPaperTradeOpenMessage({
+    chain,
+    tokenAddress,
+    name,
+    symbol,
+    entryPriceUsd: priceUsd,
+    positionSizeUsd: settings.positionSizeUsd,
+    takeProfitPct: settings.takeProfitPct,
+    stopLossPct: settings.stopLossPct,
+  });
+  const imageBuffer = renderOpenCard({
+    chainLabel: chain.label,
+    symbol,
+    name,
+    tradeMode: "paper",
+    entryPriceUsd: priceUsd,
+    positionSizeUsd: settings.positionSizeUsd,
+    takeProfitPct: settings.takeProfitPct,
+    stopLossPct: settings.stopLossPct,
+    tokenAddress,
+  });
+  await postTradeCard(bot, { caption, imageBuffer });
 }
 
 export function startPaperTradeChecker(bot) {
@@ -141,9 +151,8 @@ export function startPaperTradeChecker(bot) {
             const pnlUsd = -t.position_size_usd;
             const pnlPct = -100;
             closePaperTrade(t.id, { exitPriceUsd: 0, exitReason: "stale_price", pnlUsd, pnlPct });
-            await postUpdate(
-              bot,
-              buildPaperTradeCloseMessage({
+            await postTradeCard(bot, {
+              caption: buildPaperTradeCloseMessage({
                 chain,
                 tokenAddress: t.token_address,
                 name: t.name,
@@ -153,8 +162,20 @@ export function startPaperTradeChecker(bot) {
                 pnlUsd,
                 pnlPct,
                 exitReason: "stale_price",
-              })
-            );
+              }),
+              imageBuffer: renderCloseCard({
+                chainLabel: chain.label,
+                symbol: t.symbol,
+                name: t.name,
+                tradeMode: "paper",
+                entryPriceUsd: t.entry_price_usd,
+                exitPriceUsd: 0,
+                pnlUsd,
+                pnlPct,
+                exitReason: "stale_price",
+                tokenAddress: t.token_address,
+              }),
+            });
           } else {
             touchPaperTradeStalePrice(t.id);
           }
@@ -208,9 +229,8 @@ export function startPaperTradeChecker(bot) {
         if (exitReason) {
           const pnlUsd = t.position_size_usd * (pnlPct / 100);
           closePaperTrade(t.id, { exitPriceUsd: pair.priceUsd, exitReason, pnlUsd, pnlPct });
-          await postUpdate(
-            bot,
-            buildPaperTradeCloseMessage({
+          await postTradeCard(bot, {
+            caption: buildPaperTradeCloseMessage({
               chain,
               tokenAddress: t.token_address,
               name: t.name,
@@ -220,8 +240,20 @@ export function startPaperTradeChecker(bot) {
               pnlUsd,
               pnlPct,
               exitReason,
-            })
-          );
+            }),
+            imageBuffer: renderCloseCard({
+              chainLabel: chain.label,
+              symbol: t.symbol,
+              name: t.name,
+              tradeMode: "paper",
+              entryPriceUsd: t.entry_price_usd,
+              exitPriceUsd: pair.priceUsd,
+              pnlUsd,
+              pnlPct,
+              exitReason,
+              tokenAddress: t.token_address,
+            }),
+          });
         } else {
           touchPaperTrade(t.id);
         }

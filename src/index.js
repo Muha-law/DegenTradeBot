@@ -4,13 +4,20 @@ import { isPaused } from "./botState.js";
 import { startPairWatcher } from "./watchers/pairWatcher.js";
 import { startPollingWatcher } from "./watchers/pollingWatcher.js";
 import { evaluateToken } from "./pipeline.js";
-import { addPending, countPending, countSeen, countCalled } from "./store/db.js";
+import { addPending, countPending, countSeen, countCalled, countCalledNft } from "./store/db.js";
 import { createBot } from "./telegram/bot.js";
 import { startMilestoneChecker, startWatchlistDigest } from "./priceUpdater.js";
 import { startRecheckQueue } from "./recheckQueue.js";
 import { startTrackUpdater } from "./trackUpdater.js";
 import { startPaperTradeChecker } from "./paperTrading.js";
 import { startRealTradeChecker } from "./realTrading.js";
+import { config } from "./config.js";
+import { startNftCollectionWatcher } from "./watchers/nftCollectionWatcher.js";
+import { startNftWalletWatcher } from "./watchers/nftWalletWatcher.js";
+import { evaluateNftCollection } from "./nftPipeline.js";
+import { startNftBuyRecheckQueue } from "./nftBuyRecheckQueue.js";
+import { startNftPaperTradeChecker } from "./nftPaperTrading.js";
+import { startNftRealTradeChecker } from "./nftRealTrading.js";
 
 // Last line of defense: an async failure anywhere that isn't already
 // caught (a cron job's send call, a stray promise) otherwise crashes the
@@ -29,6 +36,7 @@ const stats = {
   get seen() { return countSeen(); },
   get called() { return countCalled(); },
   get pending() { return countPending(); },
+  get nftCalled() { return countCalledNft(); },
 };
 
 async function handleNewToken({ chain, dexName, pairAddress, tokenAddress, timestamp }) {
@@ -49,6 +57,32 @@ async function handleNewToken({ chain, dexName, pairAddress, tokenAddress, times
     addPending({ chain: chain.key, tokenAddress, pairAddress, dexName, firstSeenAt: timestamp });
   } catch (err) {
     console.error(`[${chain.key}] failed to process ${tokenAddress}:`, err.message);
+  }
+}
+
+async function handleNewNftCollection({ chain, contractAddress }) {
+  if (isPaused()) return;
+  console.log(`[${chain.key}] new NFT collection ${contractAddress}`);
+  try {
+    const result = await evaluateNftCollection(bot, { chain, contractAddress, source: "new_collection" });
+    if (result.pass) {
+      console.log(`[${chain.key}] called NFT ${result.name || "?"} (${contractAddress}) — score ${result.riskResult.score}`);
+    }
+  } catch (err) {
+    console.error(`[${chain.key}] failed to process NFT collection ${contractAddress}:`, err.message);
+  }
+}
+
+async function handleWalletNftBuy({ chain, walletAddress, contractAddress, priceEth }) {
+  if (isPaused()) return;
+  console.log(`[${chain.key}] watched wallet ${walletAddress} bought NFT ${contractAddress} for ${priceEth ?? "?"} ETH`);
+  try {
+    const result = await evaluateNftCollection(bot, { chain, contractAddress, source: "copy_trade", triggerWallet: { address: walletAddress } });
+    if (result.pass) {
+      console.log(`[${chain.key}] called NFT ${result.name || "?"} (${contractAddress}) via copy signal — score ${result.riskResult.score}`);
+    }
+  } catch (err) {
+    console.error(`[${chain.key}] failed to process copy-trade NFT ${contractAddress}:`, err.message);
   }
 }
 
@@ -95,6 +129,21 @@ startTrackUpdater(bot);
 startPaperTradeChecker(bot);
 startRealTradeChecker(bot);
 
+// NFT support is Ethereum-only for now and lives entirely behind
+// OPENSEA_API_KEY being configured — with no key, none of this starts and
+// the rest of the bot behaves exactly as it did before this feature existed.
+const nftWatcherStops = [];
+if (config.openseaApiKey) {
+  const nftChain = { key: "ethereum", ...CHAINS.ethereum };
+  nftWatcherStops.push(startNftCollectionWatcher(nftChain, handleNewNftCollection));
+  nftWatcherStops.push(startNftWalletWatcher(nftChain, handleWalletNftBuy));
+  startNftBuyRecheckQueue(bot);
+  startNftPaperTradeChecker(bot);
+  startNftRealTradeChecker(bot);
+} else {
+  console.log("[nft] OPENSEA_API_KEY not set — NFT features disabled");
+}
+
 // bot.launch() only resolves after bot.stop() is called (it awaits the
 // polling loop itself), so confirm startup via the onLaunch callback instead.
 bot.launch({}, () => console.log(`Telegram bot launched as @${bot.botInfo?.username}.`)).catch((err) => {
@@ -106,6 +155,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => {
     console.log(`Received ${signal}, shutting down…`);
     activeWatchers.forEach((stop) => stop());
+    nftWatcherStops.forEach((stop) => stop());
     bot.stop(signal);
     process.exit(0);
   });

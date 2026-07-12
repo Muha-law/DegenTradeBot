@@ -27,6 +27,13 @@ import {
   recordBotUser,
   countBotUsers,
   getRecentCalls,
+  getWatchedWallets,
+  addWatchedWallet,
+  removeWatchedWallet,
+  getNftPaperTradingStats,
+  getNftRealTradingStats,
+  getOpenNftPaperTrades,
+  getOpenNftRealTrades,
 } from "../store/db.js";
 import { buildDigestEntries } from "../watchlist.js";
 import { loadDigestSettings, saveDigestSettings } from "../digestSettings.js";
@@ -36,12 +43,19 @@ import { loadRealTradingSettings, saveRealTradingSettings } from "../realTrading
 import { hasWallet, getWalletAddress, getNativeBalance } from "../wallet.js";
 import { sellToken, buyTokenWithNativeAmount, withSlippageRetry } from "../execution/swapExecutor.js";
 import { estimateV2PriceImpact } from "../risk/priceImpact.js";
+import { renderOpenCard, renderCloseCard } from "./tradeCard.js";
+import { computeNftRiskScore } from "../risk/nftRisk.js";
+import { loadNftFilters, saveNftFilters } from "../filters/nftFilter.js";
+import { loadNftPaperTradingSettings, saveNftPaperTradingSettings } from "../nftPaperTradingSettings.js";
+import { loadNftRealTradingSettings, saveNftRealTradingSettings } from "../nftRealTradingSettings.js";
 import {
   buildCallMessage,
   buildWatchlistDigest,
   buildPaperTradingSummary,
   buildActiveTradesMessage,
   buildRealTradingSummary,
+  buildNftCallMessage,
+  buildNftTradingSummary,
   fmtUsd,
   fmtPrice,
   fmtPriceCompact,
@@ -322,6 +336,64 @@ function mainMenuKeyboard() {
     [Markup.button.callback("📈 Paper Trading", "menu:papertrading")],
     [Markup.button.callback("💰 Real Funds Trading", "menu:realtrading")],
     [Markup.button.callback("💳 Wallet Balance", "menu:walletbalance"), Markup.button.callback("📊 Bot Stats", "menu:botstats")],
+    ...(config.openseaApiKey ? [[Markup.button.callback("🖼 NFTs", "menu:nft")]] : []),
+  ]);
+}
+
+function nftMenuKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("⚙️ NFT Filter", "menu:nftfilter"), Markup.button.callback("👛 Watched Wallets", "menu:nftwallets")],
+    [Markup.button.callback("📈 NFT Paper Trading", "menu:nftpapertrading")],
+    [Markup.button.callback("💰 NFT Real Trading", "menu:nftrealtrading")],
+    [Markup.button.callback("🔍 Score Collection", "menu:nftscore")],
+    [Markup.button.callback("🔙 Menu", "menu:home")],
+  ]);
+}
+
+function nftFilterKeyboard(filters) {
+  const rows = Object.entries(filters).map(([k, v]) => [Markup.button.callback(`${k}: ${v}`, `nftfilteredit:${k}`)]);
+  rows.push([Markup.button.callback("🔙 NFTs", "menu:nft")]);
+  return Markup.inlineKeyboard(rows);
+}
+
+function nftWalletsKeyboard(wallets) {
+  const rows = wallets.map((w) => [Markup.button.callback(`🗑 ${w.label || w.address.slice(0, 10) + "…"}`, `nftwalletremove:${w.address}`)]);
+  rows.push([Markup.button.callback("➕ Add Wallet", "nftwalletadd")]);
+  rows.push([Markup.button.callback("🔙 NFTs", "menu:nft")]);
+  return Markup.inlineKeyboard(rows);
+}
+
+function nftPaperTradingKeyboard(settings) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback(settings.enabled ? "⏸ Pause" : "▶️ Resume", "nftpapertoggle")],
+    [Markup.button.callback(`Budget: ${settings.totalBudgetEth} ETH`, "nftpaperedit:totalBudgetEth")],
+    [Markup.button.callback(`Position size: ${settings.positionSizeEth} ETH`, "nftpaperedit:positionSizeEth")],
+    [Markup.button.callback(`Target: ${settings.targetMultiple}x floor`, "nftpaperedit:targetMultiple")],
+    [Markup.button.callback(`Stop: ${settings.stopFloorPct}% of entry`, "nftpaperedit:stopFloorPct")],
+    [Markup.button.callback("📋 Active Positions", "menu:nftpaperactive")],
+    [Markup.button.callback("🔄 Refresh", "menu:nftpapertrading"), Markup.button.callback("🔙 NFTs", "menu:nft")],
+  ]);
+}
+
+function nftRealTradingKeyboard(settings, walletReady) {
+  const toggleAction = settings.enabled ? "nftrealtoggle" : "nftrealconfirm:enable";
+  const rows = [
+    [Markup.button.callback(settings.enabled ? "⏸ Pause (real money)" : "▶️ Enable REAL NFT trading", toggleAction)],
+    [Markup.button.callback(`Budget: ${settings.totalBudgetEth} ETH`, "nftrealedit:totalBudgetEth")],
+    [Markup.button.callback(`Position size: ${settings.positionSizeEth} ETH`, "nftrealedit:positionSizeEth")],
+    [Markup.button.callback(`Target: ${settings.targetMultiple}x floor`, "nftrealedit:targetMultiple")],
+    [Markup.button.callback(`Stop: ${settings.stopFloorPct}% of entry`, "nftrealedit:stopFloorPct")],
+    [Markup.button.callback("📋 Active Positions", "menu:nftrealactive")],
+    [Markup.button.callback("🔄 Refresh", "menu:nftrealtrading"), Markup.button.callback("🔙 NFTs", "menu:nft")],
+  ];
+  if (!walletReady) rows.unshift([Markup.button.callback("⚠️ No wallet configured — see .env", "menu:nftrealtrading")]);
+  return Markup.inlineKeyboard(rows);
+}
+
+function nftRealEnableConfirmKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("✅ Yes, trade NFTs with REAL money", "nftrealtoggle")],
+    [Markup.button.callback("❌ Cancel", "menu:nftrealtrading")],
   ]);
 }
 
@@ -558,6 +630,13 @@ async function scoreAndReply(ctx, chainKey, tokenAddress) {
   await ctx.reply(message, { parse_mode: "Markdown", ...backKeyboard() });
 }
 
+async function scoreAndReplyNft(ctx, contractAddress) {
+  const chain = { key: "ethereum", ...CHAINS.ethereum };
+  const riskResult = await computeNftRiskScore(chain, contractAddress);
+  const message = buildNftCallMessage({ chain, contractAddress, riskResult, source: "new_collection" });
+  await ctx.reply(message, { parse_mode: "Markdown", ...backKeyboard() });
+}
+
 // Resolves a bare <address> (auto-detected chain) or explicit <chain>
 // <address> from a plain args array (no leading command word).
 async function resolveChainAndAddress(ctx, args, usage) {
@@ -729,7 +808,19 @@ async function executeManualBuy(ctx, context, nativeAmount) {
         entryGasUsd: result.gasUsd,
       });
     }
-    await ctx.reply(`✅ Bought ${nativeAmount} ${chainDef.nativeSymbol} (~${fmtUsd(result.usdSpent)}) — gas ${fmtUsd(result.gasUsd)}\nTx: \`${result.txHash}\``, { parse_mode: "Markdown" });
+    const caption = `✅ Bought ${nativeAmount} ${chainDef.nativeSymbol} (~${fmtUsd(result.usdSpent)}) — gas ${fmtUsd(result.gasUsd)}\nTx: \`${result.txHash}\``;
+    const imageBuffer = renderOpenCard({
+      chainLabel: chainDef.label,
+      symbol: context.symbol,
+      name: context.name,
+      tradeMode: "real",
+      entryPriceUsd: result.entryPriceUsd,
+      positionSizeUsd: result.usdSpent,
+      takeProfitPct: settings.takeProfitPct,
+      stopLossPct: settings.stopLossPct,
+      tokenAddress,
+    });
+    await ctx.replyWithPhoto({ source: imageBuffer }, { caption, parse_mode: "Markdown" });
   } catch (err) {
     await ctx.reply(`⚠️ Buy failed: ${err.message}`);
   } finally {
@@ -780,10 +871,20 @@ async function executeManualSell(ctx, context, pct) {
       const remainingUsd = position.position_size_usd - soldFractionUsd;
       reduceRealTrade(position.id, { tokenAmountRaw: remainingRaw, positionSizeUsd: remainingUsd });
     }
-    await ctx.reply(
-      `✅ Sold ${pct}% — proceeds ${fmtUsd(sellResult.proceedsUsd)} (${pnlUsd >= 0 ? "+" : ""}${fmtUsd(Math.abs(pnlUsd))}, ${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}%), gas ${fmtUsd(sellResult.gasUsd)}\nTx: \`${sellResult.txHash}\``,
-      { parse_mode: "Markdown" }
-    );
+    const caption = `✅ Sold ${pct}% — proceeds ${fmtUsd(sellResult.proceedsUsd)} (${pnlUsd >= 0 ? "+" : ""}${fmtUsd(Math.abs(pnlUsd))}, ${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}%), gas ${fmtUsd(sellResult.gasUsd)}\nTx: \`${sellResult.txHash}\``;
+    const imageBuffer = renderCloseCard({
+      chainLabel: chainDef.label,
+      symbol: context.symbol,
+      name: context.name,
+      tradeMode: "real",
+      entryPriceUsd: position.entry_price_usd,
+      exitPriceUsd,
+      pnlUsd,
+      pnlPct,
+      exitReason: pct >= 100 ? "manual_close" : "manual_sell",
+      tokenAddress,
+    });
+    await ctx.replyWithPhoto({ source: imageBuffer }, { caption, parse_mode: "Markdown" });
   } catch (err) {
     await ctx.reply(`⚠️ Sell failed: ${err.message}`);
   } finally {
@@ -868,6 +969,74 @@ async function handlePendingAction(ctx, pending, text, digestControls) {
       note = "\n⚠️ Trades execute a hard-coded $50/trade safety ceiling regardless of this setting — this value won't actually be used above that.";
     }
     return ctx.reply(`Updated *${pending.key}*: ${prev} → ${value}${note}`, { parse_mode: "Markdown", ...backKeyboard() });
+  }
+
+  if (pending.type === "nftFilter") {
+    const filters = loadNftFilters();
+    const prev = filters[pending.key];
+    const nextValue = typeof prev === "boolean" ? text.trim().toLowerCase() === "true" : Number(text.trim());
+    if (typeof prev === "number" && Number.isNaN(nextValue)) {
+      return ctx.reply("That doesn't look like a valid number — tap the setting again to retry.");
+    }
+    filters[pending.key] = nextValue;
+    saveNftFilters(filters);
+    return ctx.reply(`Updated *${pending.key}*: ${prev} → ${nextValue}`, { parse_mode: "Markdown", ...backKeyboard() });
+  }
+
+  if (pending.type === "nftWalletAdd") {
+    const [rawAddress, ...labelParts] = text.trim().split(/\s+/);
+    if (!ADDRESS_RE.test(rawAddress)) {
+      return ctx.reply("That doesn't look like a valid wallet address — tap Add Wallet again to retry.");
+    }
+    addWatchedWallet(rawAddress, labelParts.join(" ") || null);
+    const wallets = getWatchedWallets();
+    return ctx.reply(`👛 Now watching \`${rawAddress}\`${labelParts.length ? ` (${labelParts.join(" ")})` : ""}`, {
+      parse_mode: "Markdown",
+      ...nftWalletsKeyboard(wallets),
+    });
+  }
+
+  if (pending.type === "nftPaperTrading") {
+    const value = Number(text.trim());
+    if (!Number.isFinite(value)) {
+      return ctx.reply("That doesn't look like a valid number — tap the setting again to retry.");
+    }
+    const settings = loadNftPaperTradingSettings();
+    const prev = settings[pending.key];
+    settings[pending.key] = value;
+    saveNftPaperTradingSettings(settings);
+    return ctx.reply(`Updated *${pending.key}*: ${prev} → ${value}`, { parse_mode: "Markdown", ...backKeyboard() });
+  }
+
+  if (pending.type === "nftRealTrading") {
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const value = Number(text.trim());
+    if (!Number.isFinite(value)) {
+      return ctx.reply("That doesn't look like a valid number — tap the setting again to retry.");
+    }
+    const settings = loadNftRealTradingSettings();
+    const prev = settings[pending.key];
+    settings[pending.key] = value;
+    saveNftRealTradingSettings(settings);
+    let note = "";
+    if (pending.key === "positionSizeEth" && value > 0.15) {
+      note = "\n⚠️ Buys execute a hard-coded 0.15 ETH/item safety ceiling regardless of this setting — this value won't actually be used above that.";
+    }
+    return ctx.reply(`Updated *${pending.key}*: ${prev} → ${value}${note}`, { parse_mode: "Markdown", ...backKeyboard() });
+  }
+
+  if (pending.type === "nftScore") {
+    const contractAddress = text.trim();
+    if (!ADDRESS_RE.test(contractAddress)) {
+      return ctx.reply("That doesn't look like a valid contract address.");
+    }
+    await ctx.reply("Analyzing…");
+    try {
+      await scoreAndReplyNft(ctx, contractAddress);
+    } catch (err) {
+      return ctx.reply(`Failed to score collection: ${err.message}`);
+    }
+    return;
   }
 
   if (pending.type === "realManualBuyAmount") {
@@ -1508,6 +1677,188 @@ export function createBot(stats, chainControls, digestControls) {
     await safeEdit(ctx, "⛓ *Chains*\n\nTap a chain to turn its watcher on or off:", chainsKeyboard());
   });
 
+  // --- NFT menu — all gated behind OPENSEA_API_KEY being configured (the
+  // main-menu button itself is already hidden without it, but every entry
+  // point re-checks since callback data could in principle be replayed).
+  function requireOpensea(ctx) {
+    if (!config.openseaApiKey) {
+      ctx.answerCbQuery?.("NFT features need OPENSEA_API_KEY set in .env.");
+      return false;
+    }
+    return true;
+  }
+
+  bot.action("menu:nft", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireOpensea(ctx)) return;
+    await safeEdit(
+      ctx,
+      "🖼 *NFTs*\n\nNew-collection sniping + wallet copy-trading on Ethereum, via OpenSea. NFT exits list on the marketplace and wait for a buyer — not an instant swap like token trading.",
+      nftMenuKeyboard()
+    );
+  });
+
+  bot.action("menu:nftfilter", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireOpensea(ctx)) return;
+    const filters = loadNftFilters();
+    await safeEdit(ctx, "⚙️ *NFT Filter Settings*\n\nTap a setting to change it:", nftFilterKeyboard(filters));
+  });
+
+  bot.action(/^nftfilteredit:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized to change filters.");
+    const key = ctx.match[1];
+    const filters = loadNftFilters();
+    if (!(key in filters)) return ctx.reply("Unknown filter key.");
+    setPending(ctx.chat.id, { type: "nftFilter", key });
+    await ctx.reply(`Send the new value for *${key}* (current: ${filters[key]}):`, { parse_mode: "Markdown" });
+  });
+
+  bot.action("menu:nftwallets", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireOpensea(ctx)) return;
+    const wallets = getWatchedWallets();
+    const text = wallets.length
+      ? `👛 *Watched Wallets* (${wallets.length})\n\nCopy-trade signals fire when one of these buys an NFT.`
+      : "👛 *Watched Wallets*\n\nNone yet — tap Add Wallet to start copy-trading a wallet's NFT buys.";
+    await safeEdit(ctx, text, nftWalletsKeyboard(wallets));
+  });
+
+  bot.action("nftwalletadd", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    setPending(ctx.chat.id, { type: "nftWalletAdd" });
+    await ctx.reply("Send the wallet address to watch, optionally followed by a label — e.g. `0xabc... whale1`", { parse_mode: "Markdown" });
+  });
+
+  bot.action(/^nftwalletremove:(.+)$/, async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    const address = ctx.match[1];
+    const removed = removeWatchedWallet(address);
+    await ctx.answerCbQuery(removed ? "Removed." : "Not found.");
+    const wallets = getWatchedWallets();
+    await safeEdit(ctx, `👛 *Watched Wallets* (${wallets.length})`, nftWalletsKeyboard(wallets));
+  });
+
+  bot.action("menu:nftpapertrading", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireOpensea(ctx)) return;
+    const settings = loadNftPaperTradingSettings();
+    const stats = getNftPaperTradingStats();
+    await safeEdit(ctx, buildNftTradingSummary({ settings, stats, mode: "paper" }), nftPaperTradingKeyboard(settings));
+  });
+
+  bot.action("nftpapertoggle", async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    const settings = loadNftPaperTradingSettings();
+    settings.enabled = !settings.enabled;
+    saveNftPaperTradingSettings(settings);
+    await ctx.answerCbQuery(settings.enabled ? "NFT paper trading resumed" : "NFT paper trading paused");
+    const stats = getNftPaperTradingStats();
+    await safeEdit(ctx, buildNftTradingSummary({ settings, stats, mode: "paper" }), nftPaperTradingKeyboard(settings));
+  });
+
+  bot.action(/^nftpaperedit:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    const key = ctx.match[1];
+    const settings = loadNftPaperTradingSettings();
+    if (!(key in settings)) return ctx.reply("Unknown setting.");
+    setPending(ctx.chat.id, { type: "nftPaperTrading", key });
+    await ctx.reply(`Send the new value for *${key}* (current: ${settings[key]}):`, { parse_mode: "Markdown" });
+  });
+
+  function renderNftPositionsText(positions, mode) {
+    const label = mode === "real" ? "REAL NFT Positions" : "NFT Paper Positions";
+    if (positions.length === 0) return `📋 *${label}* (0)\n\nNothing open right now.`;
+    const lines = positions.map((p) => {
+      const statusTag = p.status === "listed" ? `🏷️ listed at ${p.listed_price_eth} ETH` : "🟢 held";
+      return `*${escapeMd(p.name) || "?"}* #${p.token_id} (${p.chain})\n   Entry: ${p.entry_price_eth} ETH | Target: ${p.target_multiple}x | Stop: ${p.stop_floor_pct}% — ${statusTag}`;
+    });
+    return `📋 *${label}* (${positions.length})\n\n${lines.join("\n\n")}`;
+  }
+
+  bot.action("menu:nftpaperactive", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireOpensea(ctx)) return;
+    const positions = getOpenNftPaperTrades();
+    await safeEdit(ctx, renderNftPositionsText(positions, "paper"), refreshKeyboard("menu:nftpaperactive"));
+  });
+
+  bot.action("menu:nftrealactive", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireOpensea(ctx)) return;
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const positions = getOpenNftRealTrades();
+    await safeEdit(ctx, renderNftPositionsText(positions, "real"), refreshKeyboard("menu:nftrealactive"));
+  });
+
+  bot.action("menu:nftrealtrading", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireOpensea(ctx)) return;
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const settings = loadNftRealTradingSettings();
+    const stats = getNftRealTradingStats();
+    await safeEdit(ctx, buildNftTradingSummary({ settings, stats, mode: "real" }), nftRealTradingKeyboard(settings, hasWallet()));
+  });
+
+  bot.action("nftrealconfirm:enable", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    if (!hasWallet()) return safeEdit(ctx, "⚠️ No wallet configured. Add WALLET_PRIVATE_KEY to .env first.", nftRealTradingKeyboard(loadNftRealTradingSettings(), false));
+    const settings = loadNftRealTradingSettings();
+    await safeEdit(
+      ctx,
+      `⚠️ *This trades NFTs with real money.*\n\nPosition size: ${settings.positionSizeEth} ETH | Budget: ${settings.totalBudgetEth} ETH\n\n` +
+        `NFT exits list on OpenSea and wait for a buyer — not a guaranteed or instant sale like token trading. Continue?`,
+      nftRealEnableConfirmKeyboard()
+    );
+  });
+
+  bot.action("nftrealtoggle", async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const settings = loadNftRealTradingSettings();
+    if (!settings.enabled && !hasWallet()) {
+      await ctx.answerCbQuery("No wallet configured.");
+      return safeEdit(ctx, "⚠️ No wallet configured. Add WALLET_PRIVATE_KEY to .env first.", nftRealTradingKeyboard(settings, false));
+    }
+    settings.enabled = !settings.enabled;
+    saveNftRealTradingSettings(settings);
+    await ctx.answerCbQuery(settings.enabled ? "🔴 REAL NFT trading enabled" : "Real NFT trading paused");
+    const stats = getNftRealTradingStats();
+    await safeEdit(ctx, buildNftTradingSummary({ settings, stats, mode: "real" }), nftRealTradingKeyboard(settings, hasWallet()));
+  });
+
+  bot.action(/^nftrealedit:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const key = ctx.match[1];
+    const settings = loadNftRealTradingSettings();
+    if (!(key in settings)) return ctx.reply("Unknown setting.");
+    setPending(ctx.chat.id, { type: "nftRealTrading", key });
+    await ctx.reply(`Send the new value for *${key}* (current: ${settings[key]}):`, { parse_mode: "Markdown" });
+  });
+
+  bot.action("menu:nftscore", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!requireOpensea(ctx)) return;
+    setPending(ctx.chat.id, { type: "nftScore" });
+    await ctx.reply("Paste the NFT collection's contract address.");
+  });
+
   // Slash commands still work underneath the buttons, for muscle memory.
   bot.command("status", (ctx) => ctx.reply(renderStatusText(stats), { parse_mode: "Markdown", ...backKeyboard() }));
   bot.command("watchlist", async (ctx) => {
@@ -1561,6 +1912,32 @@ export function createBot(stats, chainControls, digestControls) {
     if (!resolved) return;
     const removed = deactivateTrack(resolved.chainKey, resolved.tokenAddress);
     ctx.reply(removed ? "Stopped tracking." : "Wasn't tracking that token.");
+  });
+  bot.command("nftscore", async (ctx) => {
+    if (!requireOpensea(ctx)) return ctx.reply("NFT features need OPENSEA_API_KEY set in .env.");
+    const args = ctx.message.text.split(/\s+/).filter(Boolean).slice(1);
+    const contractAddress = args[0];
+    if (!contractAddress || !ADDRESS_RE.test(contractAddress)) return ctx.reply("Usage: /nftscore <contractAddress>");
+    await ctx.reply("Analyzing…");
+    try {
+      await scoreAndReplyNft(ctx, contractAddress);
+    } catch (err) {
+      ctx.reply(`Failed to score collection: ${err.message}`);
+    }
+  });
+  bot.command("watchwallet", (ctx) => {
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    const [, address, ...labelParts] = ctx.message.text.split(/\s+/);
+    if (!address || !ADDRESS_RE.test(address)) return ctx.reply("Usage: /watchwallet <address> [label]");
+    addWatchedWallet(address, labelParts.join(" ") || null);
+    ctx.reply(`👛 Now watching \`${address}\``, { parse_mode: "Markdown" });
+  });
+  bot.command("unwatchwallet", (ctx) => {
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    const [, address] = ctx.message.text.split(/\s+/);
+    if (!address) return ctx.reply("Usage: /unwatchwallet <address>");
+    const removed = removeWatchedWallet(address);
+    ctx.reply(removed ? "Removed." : "Wasn't watching that address.");
   });
 
   // Free text: either the answer to a button prompt, or a bare pasted
@@ -1629,4 +2006,69 @@ export async function postCall(bot, { chain, tokenAddress, riskResult, name, sym
 
 export async function postUpdate(bot, text) {
   return broadcast(bot, truncateForTelegram(text));
+}
+
+// Telegram caption limit is 1024 chars (much shorter than a text message's
+// 4096) — the open/close messages this feeds are already only a few short
+// lines, but truncate defensively rather than let sendPhoto throw on an
+// unexpectedly long one (e.g. a token with a very long name/symbol).
+const TELEGRAM_CAPTION_MAX_LENGTH = 1024;
+function truncateCaption(text) {
+  if (text.length <= TELEGRAM_CAPTION_MAX_LENGTH) return text;
+  return `${text.slice(0, TELEGRAM_CAPTION_MAX_LENGTH - 20)}\n\n… (truncated)`;
+}
+
+// Sends a rendered trade card (open/close PNG from telegram/tradeCard.js) as
+// a photo with the existing text message as its caption — same
+// per-destination independent-delivery discipline as broadcast(), with a
+// text-only fallback if the image itself fails to send for some reason
+// (channel permissions, oversized buffer, etc.) so a rendering hiccup never
+// costs the update entirely.
+export async function postTradeCard(bot, { caption, imageBuffer }) {
+  const text = truncateCaption(caption);
+  for (const destination of config.telegram.destinations) {
+    try {
+      await bot.telegram.sendPhoto(destination, { source: imageBuffer }, { caption: text, parse_mode: "Markdown" });
+    } catch (err) {
+      console.error(`Failed to send trade card to ${destination}:`, err.message);
+      try {
+        await bot.telegram.sendMessage(destination, truncateForTelegram(caption), { parse_mode: "Markdown" });
+      } catch (err2) {
+        console.error(`Text fallback also failed for ${destination}:`, err2.message);
+      }
+    }
+  }
+}
+
+// Same per-destination independent-delivery discipline as broadcast() above,
+// but sends the collection image via sendPhoto (caption = the call text)
+// when one is available, falling back to a plain text message otherwise —
+// unlike token calls, an NFT call has a real, usually-distinctive image
+// worth showing inline rather than just linking out.
+export async function postNftCall(bot, { chain, contractAddress, riskResult, source, triggerWalletLabel }) {
+  const message = truncateForTelegram(buildNftCallMessage({ chain, contractAddress, riskResult, source, triggerWalletLabel }));
+  const imageUrl = riskResult.imageUrl;
+
+  let primaryMessageId = null;
+  for (const destination of config.telegram.destinations) {
+    try {
+      const sent = imageUrl
+        ? await bot.telegram.sendPhoto(destination, imageUrl, { caption: message, parse_mode: "Markdown" })
+        : await bot.telegram.sendMessage(destination, message, { parse_mode: "Markdown" });
+      if (destination === config.telegram.chatId) primaryMessageId = sent.message_id;
+    } catch (err) {
+      console.error(`Failed to send NFT call to ${destination}:`, err.message);
+      // A bad/unreachable image URL shouldn't lose the call entirely — retry
+      // that one destination as a plain text message.
+      if (imageUrl) {
+        try {
+          const sent = await bot.telegram.sendMessage(destination, message, { parse_mode: "Markdown" });
+          if (destination === config.telegram.chatId) primaryMessageId = sent.message_id;
+        } catch (err2) {
+          console.error(`Text fallback also failed for ${destination}:`, err2.message);
+        }
+      }
+    }
+  }
+  return primaryMessageId;
 }
