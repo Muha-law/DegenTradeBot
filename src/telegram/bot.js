@@ -2018,6 +2018,48 @@ export function createBot(stats, chainControls, digestControls) {
     addWatchedWallet(resolved.address, label);
     ctx.reply(`👛 Now watching \`${resolved.address}\`${label ? ` (${escapeMd(label)})` : ""}`, { parse_mode: "Markdown" });
   });
+  // Bulk-import version of /watchwallet — one entry per line (address or
+  // ENS name, optionally followed by a label), for loading a real
+  // watchlist in a handful of messages instead of one command per wallet.
+  // Telegram itself caps an incoming text message at 4096 chars, so a
+  // large list (dozens+) still needs sending in a few chunks — that's fine,
+  // addWatchedWallet is idempotent (INSERT ... ON CONFLICT DO UPDATE), so
+  // re-sending an overlapping chunk is harmless.
+  bot.command("watchwallets", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    const body = ctx.message.text.replace(/^\/watchwallets(@\w+)?\s*/i, "");
+    const entries = body
+      .split(/\n+/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (entries.length === 0) {
+      return ctx.reply(
+        "Usage: /watchwallets followed by one address or ENS name per line (optional label after it), e.g.\n" +
+          "/watchwallets\n0xabc... whale1\nvitalik.eth"
+      );
+    }
+    await ctx.reply(`Processing ${entries.length} entries…`);
+
+    let added = 0;
+    const failed = [];
+    for (const entry of entries) {
+      const [rawInput, ...labelParts] = entry.split(/\s+/);
+      const resolved = await resolveWalletAddressInput(rawInput);
+      if (!resolved) {
+        failed.push(entry);
+        continue;
+      }
+      addWatchedWallet(resolved.address, labelParts.join(" ") || resolved.label);
+      added++;
+    }
+
+    const lines = [`👛 Added/updated ${added} watched wallet(s).`];
+    if (failed.length) {
+      lines.push(`⚠️ ${failed.length} couldn't be resolved:`, ...failed.slice(0, 15).map((f) => `  ${f}`));
+      if (failed.length > 15) lines.push(`  … and ${failed.length - 15} more`);
+    }
+    ctx.reply(lines.join("\n"));
+  });
   bot.command("unwatchwallet", (ctx) => {
     if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
     const [, address] = ctx.message.text.split(/\s+/);
