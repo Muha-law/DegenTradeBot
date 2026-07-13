@@ -11,7 +11,7 @@ import {
   closeNftPaperTrade,
   getNftPaperTradingStats,
 } from "./store/db.js";
-import { postUpdate } from "./telegram/bot.js";
+import { postNftUpdate } from "./telegram/bot.js";
 import { buildNftPaperTradeOpenMessage, buildNftListedMessage, buildNftPaperTradeCloseMessage } from "./telegram/formatMessage.js";
 
 const CHECK_CRON = "*/5 * * * *"; // NFT floor prices move far slower than a DEX pool — 5m is plenty.
@@ -47,7 +47,7 @@ export async function openNftPaperTradeIfRoom(bot, { chain, contractAddress, col
   });
   if (res.changes === 0) return;
 
-  await postUpdate(
+  await postNftUpdate(
     bot,
     buildNftPaperTradeOpenMessage({
       chain,
@@ -84,10 +84,10 @@ export function startNftPaperTradeChecker(bot) {
 
           if (floor >= targetPrice) {
             markNftPaperTradeListed(t.id, { listedPriceEth: floor, listedAt: Date.now() });
-            await postUpdate(bot, buildNftListedMessage({ chain, contractAddress: t.contract_address, name: t.name, tokenId: t.token_id, listedPriceEth: floor, reason: "take_profit", mode: "paper" }));
+            await postNftUpdate(bot, buildNftListedMessage({ chain, contractAddress: t.contract_address, name: t.name, tokenId: t.token_id, listedPriceEth: floor, reason: "take_profit", mode: "paper" }));
           } else if (floor <= stopPrice) {
             markNftPaperTradeListed(t.id, { listedPriceEth: floor, listedAt: Date.now() });
-            await postUpdate(bot, buildNftListedMessage({ chain, contractAddress: t.contract_address, name: t.name, tokenId: t.token_id, listedPriceEth: floor, reason: "stop_floor", mode: "paper" }));
+            await postNftUpdate(bot, buildNftListedMessage({ chain, contractAddress: t.contract_address, name: t.name, tokenId: t.token_id, listedPriceEth: floor, reason: "stop_floor", mode: "paper" }));
           } else {
             touchNftPaperTrade(t.id);
           }
@@ -106,7 +106,7 @@ export function startNftPaperTradeChecker(bot) {
           const pnlPct = (pnlEth / t.entry_price_eth) * 100;
           const exitReason = exitPriceEth >= t.entry_price_eth ? "take_profit_sold" : "stop_loss_sold";
           closeNftPaperTrade(t.id, { exitPriceEth, exitReason, pnlEth, pnlPct });
-          await postUpdate(
+          await postNftUpdate(
             bot,
             buildNftPaperTradeCloseMessage({ chain, contractAddress: t.contract_address, name: t.name, tokenId: t.token_id, entryPriceEth: t.entry_price_eth, exitPriceEth, pnlEth, pnlPct, exitReason })
           );

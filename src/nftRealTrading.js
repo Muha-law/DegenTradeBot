@@ -14,7 +14,7 @@ import {
   closeNftRealTrade,
   getNftRealTradingStats,
 } from "./store/db.js";
-import { postUpdate } from "./telegram/bot.js";
+import { postNftUpdate } from "./telegram/bot.js";
 import { buildNftRealTradeOpenMessage, buildNftListedMessage, buildNftRealTradeCloseMessage } from "./telegram/formatMessage.js";
 
 const CHECK_CRON = "*/5 * * * *";
@@ -82,7 +82,7 @@ export async function openNftRealTradeIfRoom(bot, { chain, contractAddress, coll
     return true;
   }
 
-  await postUpdate(
+  await postNftUpdate(
     bot,
     buildNftRealTradeOpenMessage({
       chain,
@@ -142,7 +142,7 @@ export function startNftRealTradeChecker(bot) {
               collectionSlug: t.collection_slug,
             });
             markNftRealTradeListed(t.id, { listedPriceEth: listPriceEth, listedAt: Date.now(), listingOrderHash: listing.orderHash });
-            await postUpdate(
+            await postNftUpdate(
               bot,
               buildNftListedMessage({ chain, contractAddress: t.contract_address, name: t.name, tokenId: t.token_id, listedPriceEth: listPriceEth, reason, mode: "real" })
             );
@@ -179,7 +179,7 @@ export function startNftRealTradeChecker(bot) {
           const pnlPct = (pnlEth / t.entry_price_eth) * 100;
           const exitReason = exitPriceEth >= t.entry_price_eth ? "take_profit_sold" : "stop_loss_sold";
           closeNftRealTrade(t.id, { exitPriceEth, exitReason, pnlEth, pnlPct, exitTxHash: sale.txHash, exitGasEth: 0 });
-          await postUpdate(
+          await postNftUpdate(
             bot,
             buildNftRealTradeCloseMessage({ chain, contractAddress: t.contract_address, name: t.name, tokenId: t.token_id, entryPriceEth: t.entry_price_eth, exitPriceEth, pnlEth, pnlPct, exitReason, txHash: sale.txHash, gasEth: 0 })
           );

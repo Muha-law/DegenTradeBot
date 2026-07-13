@@ -2,7 +2,7 @@ import { Telegraf, Markup } from "telegraf";
 import { config } from "../config.js";
 import { CHAINS } from "../chains.js";
 import { getActiveChainDefs, isChainEnabled } from "../chainSettings.js";
-import { isPaused, setPaused } from "../botState.js";
+import { isPaused, setPaused, isNftNotificationsEnabled, setNftNotificationsEnabled } from "../botState.js";
 import { loadFilters, saveFilters } from "../filters/filter.js";
 import { computeRiskScore } from "../risk/riskScore.js";
 import { getBestPair, pairSummary } from "../risk/dexscreener.js";
@@ -415,11 +415,13 @@ function mainMenuKeyboard() {
 }
 
 function nftMenuKeyboard() {
+  const notifsOn = isNftNotificationsEnabled();
   return Markup.inlineKeyboard([
     [Markup.button.callback("⚙️ NFT Filter", "menu:nftfilter"), Markup.button.callback("👛 Watched Wallets", "menu:nftwallets")],
     [Markup.button.callback("📈 NFT Paper Trading", "menu:nftpapertrading")],
     [Markup.button.callback("💰 NFT Real Trading", "menu:nftrealtrading")],
     [Markup.button.callback("🔍 Score Collection", "menu:nftscore")],
+    [Markup.button.callback(notifsOn ? "🔔 Notifications: ON (tap to mute)" : "🔕 Notifications: OFF (tap to unmute)", "menu:nfttogglenotifications")],
     [Markup.button.callback("🔙 Menu", "menu:home")],
   ]);
 }
@@ -1892,6 +1894,19 @@ export function createBot(stats, chainControls, digestControls) {
     );
   });
 
+  bot.action("menu:nfttogglenotifications", async (ctx) => {
+    if (!requireOpensea(ctx)) return;
+    const next = !isNftNotificationsEnabled();
+    setNftNotificationsEnabled(next);
+    await ctx.answerCbQuery(next ? "NFT notifications on" : "NFT notifications muted");
+    const chainLabels = getNftChainDefs().map((c) => c.label).join(", ") || "none configured";
+    await safeEdit(
+      ctx,
+      `🖼 *NFTs*\n\nNew-collection sniping + wallet copy-trading on ${chainLabels}, via OpenSea. NFT exits list on the marketplace and wait for a buyer — not an instant swap like token trading.`,
+      nftMenuKeyboard()
+    );
+  });
+
   bot.action("menu:nftfilter", async (ctx) => {
     await ctx.answerCbQuery();
     if (!requireOpensea(ctx)) return;
@@ -2314,6 +2329,16 @@ export async function postUpdate(bot, text) {
   return broadcast(bot, truncateForTelegram(text));
 }
 
+// Same as postUpdate, but for NFT-side messages specifically (trade opens/
+// closes/listings, comando activations) — gated by the notifications toggle
+// so the underlying NFT scanning/paper-trading logic can keep running
+// (stats stay meaningful) while Telegram stays quiet. Does not affect
+// postNftCall below, which has its own identical check.
+export async function postNftUpdate(bot, text) {
+  if (!isNftNotificationsEnabled()) return null;
+  return broadcast(bot, truncateForTelegram(text));
+}
+
 // Telegram caption limit is 1024 chars (much shorter than a text message's
 // 4096) — the open/close messages this feeds are already only a few short
 // lines, but truncate defensively rather than let sendPhoto throw on an
@@ -2352,6 +2377,10 @@ export async function postTradeCard(bot, { caption, imageBuffer }) {
 // unlike token calls, an NFT call has a real, usually-distinctive image
 // worth showing inline rather than just linking out.
 export async function postNftCall(bot, { chain, contractAddress, riskResult, source, triggerWalletLabel }) {
+  // Scoring/recording/paper-trading for this collection still happens
+  // upstream in nftPipeline.js regardless — this only mutes the message
+  // itself, same as postNftUpdate above.
+  if (!isNftNotificationsEnabled()) return null;
   const message = truncateForTelegram(buildNftCallMessage({ chain, contractAddress, riskResult, source, triggerWalletLabel }));
   // sendPhoto captions cap at 1024 chars — a quarter of a text message's
   // 4096. Truncating both to 4096 meant any flag-heavy call (i.e. exactly
