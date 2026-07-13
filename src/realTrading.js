@@ -5,14 +5,15 @@ import { loadRealTradingSettings, isChainTradingEnabled } from "./realTradingSet
 import { getBestPair, pairSummary } from "./risk/dexscreener.js";
 import { checkFreshLiquidity } from "./filters/filter.js";
 import { shouldExitMooner } from "./ai/superComando.js";
-import { buyToken, sellToken, verifySellable, withSlippageRetry } from "./execution/swapExecutor.js";
-import { hasWallet } from "./wallet.js";
+import { buyToken, sellToken, verifySellable, withSlippageRetry, getTokenBalance } from "./execution/swapExecutor.js";
+import { hasWallet, getWalletAddress } from "./wallet.js";
 import {
   openRealTrade,
   getOpenRealTrades,
   touchRealTrade,
   touchRealTradeStalePrice,
   closeRealTrade,
+  reduceRealTrade,
   getRealTradingStats,
   activateRealComandoMode,
   touchRealComando,
@@ -227,6 +228,71 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
   });
 }
 
+// Below this fraction of the recorded amount, treat the position as
+// effectively wiped out rather than "a bit less than expected".
+const DRAINED_WRITEOFF_FRACTION = 0.01;
+
+// Called whenever a real sell fails outright. A token contract can seize or
+// burn a holding through a path that never emits a standard Transfer event
+// (confirmed live on catnip/NIP: balance dropped 99.97% with zero outgoing
+// Transfer logs) — nothing else here would ever notice, and the checker
+// would otherwise retry the exact same doomed sell every 2 minutes forever.
+// Compares the wallet's actual on-chain balance against what's recorded and
+// either corrects the record (some real balance left, just less than
+// expected) or writes the position off outright (next to nothing left).
+// Returns true if it handled the position (corrected or closed) so the
+// caller shouldn't also fall back to its normal "retry next cycle" bookkeeping.
+async function reconcileIfBalanceVanished(bot, chain, t) {
+  const walletAddress = getWalletAddress();
+  if (!walletAddress) return false;
+
+  let actualBalance;
+  try {
+    actualBalance = await getTokenBalance(chain, t.token_address, walletAddress);
+  } catch (err) {
+    console.error(`[realTrading] balance reconciliation check failed for ${t.symbol} (${t.chain}):`, err.message);
+    return false;
+  }
+
+  const recorded = BigInt(t.token_amount_raw);
+  if (actualBalance >= recorded) return false; // recorded amount is still accurate — a genuine on-chain sell block, not a balance mismatch
+
+  if (actualBalance < (recorded * BigInt(Math.round(DRAINED_WRITEOFF_FRACTION * 10000))) / 10000n) {
+    const pnlUsd = -(t.position_size_usd + (t.entry_gas_usd || 0));
+    closeRealTrade(t.id, {
+      exitPriceUsd: 0,
+      exitReason: "balance_vanished",
+      pnlUsd,
+      pnlPct: -100,
+      nativeReceived: 0,
+      exitTxHash: null,
+      exitGasUsd: 0,
+    });
+    console.error(
+      `[realTrading] ${t.symbol} (${t.chain}) balance vanished (recorded ${recorded}, actual ${actualBalance}) — written off as a total loss`
+    );
+    await postUpdate(
+      bot,
+      buildRealTradeFailedMessage({
+        chain,
+        tokenAddress: t.token_address,
+        name: t.name,
+        symbol: t.symbol,
+        reason: `⚠️ Sell kept failing — actual wallet balance (${actualBalance}) is far below what was recorded (${recorded}), with no explaining transfer. Likely the contract silently seized/burned the holding. Written off as a total loss ($${t.position_size_usd.toFixed(2)}).`,
+      })
+    );
+    return true;
+  }
+
+  // Some real balance left, just less than recorded (partial drain, or a
+  // taxed/rebasing transfer) — correct the record so the next cycle retries
+  // a sellable amount instead of repeating the same impossible one.
+  const correctedUsd = t.position_size_usd * (Number(actualBalance) / Number(recorded));
+  reduceRealTrade(t.id, { tokenAmountRaw: actualBalance.toString(), positionSizeUsd: correctedUsd });
+  console.error(`[realTrading] ${t.symbol} (${t.chain}) balance mismatch — corrected recorded amount from ${recorded} to ${actualBalance}`);
+  return true;
+}
+
 export function startRealTradeChecker(bot) {
   const task = cron.schedule(CHECK_CRON, async () => {
     if (isPaused()) return;
@@ -262,7 +328,8 @@ export function startRealTradeChecker(bot) {
               sellResult = await withSlippageRetry((bps) => sellToken(chain, t.token_address, t.token_amount_raw, bps), settings.slippageBps);
             } catch (err) {
               console.error(`[realTrading] stale-price forced sell failed for ${t.symbol} (${t.chain}) after slippage retries:`, err.message);
-              touchRealTradeStalePrice(t.id);
+              const reconciled = await reconcileIfBalanceVanished(bot, chain, t);
+              if (!reconciled) touchRealTradeStalePrice(t.id);
               continue;
             }
 
@@ -360,7 +427,8 @@ export function startRealTradeChecker(bot) {
             // retry next cycle rather than mark it closed on a transaction
             // that never happened.
             console.error(`[realTrading] SELL FAILED for ${t.symbol} (${t.chain}), exitReason=${exitReason}, after slippage retries:`, err.message);
-            touchRealTrade(t.id);
+            const reconciled = await reconcileIfBalanceVanished(bot, chain, t);
+            if (!reconciled) touchRealTrade(t.id);
             continue;
           }
 

@@ -1,5 +1,5 @@
 import { Contract, formatEther, parseEther, MaxUint256 } from "ethers";
-import { getWalletForChain } from "../wallet.js";
+import { getWalletForChain, getProvider } from "../wallet.js";
 import { getBestPair, pairSummary } from "../risk/dexscreener.js";
 
 const ROUTER_ABI = [
@@ -122,6 +122,16 @@ function requireWallet(chain) {
 // the liquidity pair — i.e. selling — which only a pair-targeted test can
 // catch. probeSellability() (the pre-call gate) already tests against the
 // real pair for this reason; this fallback now matches it.
+// Read-only balance check — used by the position checker to notice when a
+// wallet's actual holding of a token has fallen out of sync with the amount
+// recorded at buy time (e.g. a contract-side confiscation/burn that skips
+// the standard Transfer event), so it can correct or write off the position
+// instead of retrying an amount that can never sell.
+export async function getTokenBalance(chain, tokenAddress, holderAddress) {
+  const token = new Contract(tokenAddress, ERC20_ABI, getProvider(chain));
+  return token.balanceOf(holderAddress);
+}
+
 export async function verifySellable(chain, tokenAddress, tokenAmountRaw, pairAddress) {
   const wallet = requireWallet(chain);
   const token = new Contract(tokenAddress, ERC20_ABI, wallet);
