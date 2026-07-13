@@ -6,6 +6,7 @@ import { openPaperTradeIfRoom } from "./paperTrading.js";
 import { openRealTradeIfRoom } from "./realTrading.js";
 import { screenForRugPatterns } from "./ai/rugDetector.js";
 import { analyzeRugRisk } from "./ai/rugAnalyst.js";
+import { probeSellability } from "./risk/sellability.js";
 import { getBestPair, pairSummary } from "./risk/dexscreener.js";
 
 // For each prior same-name call, fetches its current price (best-effort) so
@@ -53,6 +54,24 @@ export async function evaluateToken(bot, { chain, dexName, pairAddress, tokenAdd
   }
 
   const { name, symbol } = riskResult;
+
+  // Selective-honeypot gate — the one check that catches a token engineered
+  // to pass everything else (real liquidity, burned LP, real buy volume,
+  // clean name) while blocking most holders from selling. Simulates real
+  // recent buyers selling; rejects only on a confirmed honeypot verdict, not
+  // on an inconclusive/unknown result (no buyers yet, RPC blip) so it never
+  // blocks a legitimate token just because it couldn't gather data. Toggle in
+  // filters.json (requireSellabilityCheck).
+  if (filters.requireSellabilityCheck !== false) {
+    const sellCheck = await probeSellability(chain, tokenAddress, pairAddress);
+    if (sellCheck.honeypot === true) {
+      return {
+        pass: false,
+        reasons: [`Selective honeypot — ${sellCheck.blocked}/${sellCheck.tested} real holders blocked from selling`],
+        riskResult,
+      };
+    }
+  }
 
   // Optional extra gate, on top of the numeric filters above — an AI read on
   // whether the name/symbol/deployer looks like a scam pattern. Toggle lives

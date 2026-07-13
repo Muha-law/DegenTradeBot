@@ -14,5 +14,6 @@
   "minRiskScore": 0,
   "maxTokenAgeMinutes": 60,
   "requireAiScreen": true,
-  "requireClaudeRugAnalysis": true
+  "requireClaudeRugAnalysis": true,
+  "requireSellabilityCheck": true
 }
