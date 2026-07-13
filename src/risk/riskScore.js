@@ -122,15 +122,15 @@ function scoreHolderDistribution(sec, flags) {
   return Math.min(WEIGHTS.holderDistribution, points);
 }
 
-async function scoreDeployerHistory(etherscanChainId, tokenAddress, flags) {
-  const creation = await getContractCreator(etherscanChainId, tokenAddress).catch(() => ({
+async function scoreDeployerHistory(chain, tokenAddress, flags) {
+  const creation = await getContractCreator(chain, tokenAddress).catch(() => ({
     ok: false,
     reason: "error",
   }));
 
   if (!creation.ok) {
     if (creation.reason === "unsupported_chain") {
-      flags.push("Deployer history unavailable (chain not covered by free Etherscan tier)");
+      flags.push("Deployer history unavailable (chain not covered by Etherscan or Blockscout)");
     } else if (creation.reason !== "no_api_key") {
       flags.push("Deployer history unavailable");
     }
@@ -151,7 +151,7 @@ async function scoreDeployerHistory(etherscanChainId, tokenAddress, flags) {
     }
   }
 
-  const chainStats = await getDeployerTxCount(etherscanChainId, creation.deployerAddress).catch(() => null);
+  const chainStats = await getDeployerTxCount(chain, creation.deployerAddress).catch(() => null);
   if (chainStats && chainStats.contractCreations > 15) {
     points -= 6;
     flags.push(`Deployer has created ${chainStats.contractCreations} contracts (serial deployer)`);
@@ -208,11 +208,7 @@ export async function computeRiskScore(chain, tokenAddress) {
   const { points: contractSafety, fatal } = scoreContractSafety(security, flags);
   const liquidityLock = scoreLiquidityLock(security, pair, lpLock, flags);
   const holderDistribution = scoreHolderDistribution(security, flags);
-  const { points: deployerHistory, deployerAddress } = await scoreDeployerHistory(
-    chain.etherscanChainId,
-    tokenAddress,
-    flags
-  );
+  const { points: deployerHistory, deployerAddress } = await scoreDeployerHistory(chain, tokenAddress, flags);
 
   // A honeypot means nothing else matters — you can't sell no matter how
   // good liquidity/holders/deployer history look.

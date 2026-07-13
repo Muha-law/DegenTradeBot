@@ -86,15 +86,15 @@ function scoreHolderDistribution(stats, totalSupply, flags) {
 // duplicated rather than shared, matching this codebase's existing pattern
 // of parallel token/NFT (and paper/real trading) modules that stay
 // independently readable rather than sharing a common helper.
-async function scoreDeployerHistory(etherscanChainId, contractAddress, flags) {
-  const creation = await getContractCreator(etherscanChainId, contractAddress).catch(() => ({
+async function scoreDeployerHistory(chain, contractAddress, flags) {
+  const creation = await getContractCreator(chain, contractAddress).catch(() => ({
     ok: false,
     reason: "error",
   }));
 
   if (!creation.ok) {
     if (creation.reason === "unsupported_chain") {
-      flags.push("Deployer history unavailable (chain not covered by free Etherscan tier)");
+      flags.push("Deployer history unavailable (chain not covered by Etherscan or Blockscout)");
     } else if (creation.reason !== "no_api_key") {
       flags.push("Deployer history unavailable");
     }
@@ -115,7 +115,7 @@ async function scoreDeployerHistory(etherscanChainId, contractAddress, flags) {
     }
   }
 
-  const chainStats = await getDeployerTxCount(etherscanChainId, creation.deployerAddress).catch(() => null);
+  const chainStats = await getDeployerTxCount(chain, creation.deployerAddress).catch(() => null);
   if (chainStats && chainStats.contractCreations > 15) {
     points -= 6;
     flags.push(`Deployer has created ${chainStats.contractCreations} contracts (serial deployer)`);
@@ -157,7 +157,7 @@ export async function computeNftRiskScore(chain, contractAddress) {
   const { points: contractSafety, fatal } = scoreContractSafety(security, flags);
   const marketplaceLiquidity = scoreMarketplaceLiquidity(collection, stats, flags);
   const holderDistribution = scoreHolderDistribution(stats, totalSupply, flags);
-  const { points: deployerHistory, deployerAddress } = await scoreDeployerHistory(chain.etherscanChainId, contractAddress, flags);
+  const { points: deployerHistory, deployerAddress } = await scoreDeployerHistory(chain, contractAddress, flags);
 
   const total = fatal ? 0 : Math.round(contractSafety + marketplaceLiquidity + holderDistribution + deployerHistory);
   const { grade, label } = gradeFor(total);

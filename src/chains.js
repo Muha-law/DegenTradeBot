@@ -145,7 +145,14 @@ export const CHAINS = {
     // $3.2M) returned a correctly-shaped, plausible quote.
     v3QuoterAddress: "0x33e885eD0Ec9bF04EcfB19341582aADCb4c8A9E7",
     goplusChainId: "4663",
-    etherscanChainId: 4663, // not on Etherscan V2 yet (Blockscout-based) — deployer history just degrades to neutral
+    etherscanChainId: 4663, // not on Etherscan V2 yet — deployer history falls back to blockscoutBaseUrl below instead of degrading to neutral
+    // Robinhood Chain's own Blockscout instance, found by following the
+    // redirect from https://explorer.mainnet.chain.robinhood.com. Exposes
+    // the same Etherscan-shaped API for free at /api?module=...&action=...
+    // (confirmed live: module=contract&action=getcontractcreation and
+    // module=account&action=txlist both return real data) — see
+    // risk/explorer.js's Etherscan-then-Blockscout fallback.
+    blockscoutBaseUrl: "https://robinhoodchain.blockscout.com",
     dexscreenerChainId: "robinhood",
   },
 };
