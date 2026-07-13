@@ -624,6 +624,10 @@ function manualTradeKeyboard(hasOpenPosition) {
   ];
   if (hasOpenPosition) {
     rows.push(MANUAL_SELL_PERCENTS.map((pct) => Markup.button.callback(`Sell ${pct}%`, `realsellpct:${pct}`)));
+    rows.push([
+      Markup.button.callback("Sell custom %", "realsellcustom"),
+      Markup.button.callback("💰 Sell initial", "realsellinitial"),
+    ]);
   }
   rows.push([Markup.button.callback("🔄 Refresh", "realmanualrefresh")]);
   rows.push([Markup.button.callback("🔙 Real Funds Trading", "menu:realtrading")]);
@@ -632,7 +636,7 @@ function manualTradeKeyboard(hasOpenPosition) {
 
 function realActiveTradesKeyboard(trades = []) {
   const rows = trades.map((t, i) => [
-    Markup.button.callback(`🛑 Sell #${i + 1} ${t.symbol || "?"}`, `realclosetrade:${t.id}`),
+    Markup.button.callback(`🛑 Sell #${i + 1} ${t.symbol || "?"}`, `realsellmenu:${t.id}`),
     // For a position that's confirmed genuinely unsellable (e.g. a
     // maxTxAmount-style honeypot that only blocks transfers to the pair) —
     // marks it closed as a full loss without attempting an on-chain sell,
@@ -644,11 +648,69 @@ function realActiveTradesKeyboard(trades = []) {
   return Markup.inlineKeyboard(rows);
 }
 
+// Sell options for a single open position, tapped from the Active Trades
+// list — 25/50/75/100%, a manual custom %, or "sell initial" which
+// recovers just the original cost basis and leaves the rest as house money.
+function realSellMenuKeyboard(id) {
+  return Markup.inlineKeyboard([
+    [25, 50, 75, 100].map((pct) => Markup.button.callback(`${pct}%`, `realsellidpct:${id}:${pct}`)),
+    [
+      Markup.button.callback("Custom %", `realsellidcustom:${id}`),
+      Markup.button.callback("💰 Sell initial", `realsellidinitial:${id}`),
+    ],
+    [Markup.button.callback("❌ Cancel", "menu:realactive")],
+  ]);
+}
+
 function realWriteOffConfirmKeyboard(id) {
   return Markup.inlineKeyboard([
     [Markup.button.callback("☠️ Yes, write off as a total loss", `realwriteoff:${id}`)],
     [Markup.button.callback("❌ Cancel", "menu:realactive")],
   ]);
+}
+
+// Renders the Active Trades list — used on first load and after every
+// sell/write-off. Falls back to a plain reply when invoked from a
+// text-pending flow (e.g. after typing a custom %), which has no message
+// to edit in place.
+async function renderActiveTradesView(ctx) {
+  const { trades, totalUnrealizedUsd } = await getOpenRealTradesWithLivePnl();
+  trades.sort((a, b) => (b.pnlPct ?? -Infinity) - (a.pnlPct ?? -Infinity));
+  const walletBalances = await getWalletBalancesForTrades(trades);
+  await replyOrEdit(
+    ctx,
+    buildActiveTradesMessage({ trades, totalUnrealizedUsd, walletBalances, mode: "real" }),
+    realActiveTradesKeyboard(trades)
+  );
+}
+
+async function replyOrEdit(ctx, text, keyboard) {
+  if (ctx.callbackQuery) await safeEdit(ctx, text, keyboard);
+  else await ctx.reply(text, { parse_mode: "Markdown", ...keyboard });
+}
+
+// Sells `pct`% of an open real position (found by DB id) and refreshes the
+// Active Trades list — the shared execution path for the sell-percentage
+// menu (25/50/75/100/custom/"sell initial"), reachable both from a button
+// tap and from the free-text custom-% reply.
+async function performIdSell(ctx, id, pct) {
+  const t = getRealTradeById(id);
+  if (!t || t.status !== "open") {
+    return replyOrEdit(ctx, "Already closed or not found.", realActiveTradesKeyboard(getOpenRealTrades()));
+  }
+  const lockKey = `${t.chain}:${t.token_address}`;
+  if (!acquireTradeLock(lockKey)) {
+    return replyOrEdit(ctx, "A trade for this token is already in progress — please wait.", realActiveTradesKeyboard(getOpenRealTrades()));
+  }
+  const settings = loadRealTradingSettings();
+  try {
+    await sellPositionPct(t, pct, settings);
+  } catch (err) {
+    return replyOrEdit(ctx, `⚠️ Failed to sell #${id}: ${err.message}`, realActiveTradesKeyboard(getOpenRealTrades()));
+  } finally {
+    releaseTradeLock(lockKey);
+  }
+  await renderActiveTradesView(ctx);
 }
 
 function realEnableConfirmKeyboard(chainKey) {
@@ -1049,10 +1111,69 @@ async function executeManualBuy(ctx, context, nativeAmount) {
   await renderManualTradeTerminal(ctx);
 }
 
+// The % of remaining tokens to sell so proceeds match the original cost
+// basis (position_size_usd) — "sell my initial capital back" and let the
+// rest ride house money. Current position value is position_size_usd *
+// (currentPrice / entryPrice), so the fraction needed to recover the basis
+// is just entryPrice/currentPrice; if the position is underwater that's
+// >100%, so it's capped at selling everything.
+function computeInitialRecoveryPct(entryPriceUsd, currentPriceUsd) {
+  if (!isSanePrice(currentPriceUsd)) return 100;
+  return Math.min(100, (entryPriceUsd / currentPriceUsd) * 100);
+}
+
+function fmtSellPct(pct) {
+  return Number.isInteger(pct) ? String(pct) : pct.toFixed(1);
+}
+
+// Sells `pct`% (0 < pct <= 100, fractional allowed for "sell initial") of an
+// open real position's remaining tokens and updates the DB — closes the
+// trade outright at pct>=100, otherwise reduces the recorded size so the
+// rest keeps riding as a partial position. Shared by the Manual Trade
+// terminal and the Active Trades per-position sell menu.
+async function sellPositionPct(position, pct, settings) {
+  const chainDef = CHAINS[position.chain];
+  const chain = { key: position.chain, ...chainDef };
+  // Live price for the DB record — proceeds/rawAmount would need the
+  // token's decimals to back out correctly, and we already have this
+  // from a real quote instead of assuming 18 decimals.
+  const dexPair = await getBestPair(chainDef.dexscreenerChainId, position.token_address);
+  const pair = pairSummary(dexPair, position.token_address);
+  const exitPriceUsd = pair && isSanePrice(pair.priceUsd) ? pair.priceUsd : position.entry_price_usd;
+
+  // Scaled to hundredths of a percent so fractional pct (e.g. a "sell
+  // initial" recovery of 63.42%) doesn't blow up BigInt(pct).
+  const pctBasis = BigInt(Math.round(Math.min(100, Math.max(0, pct)) * 100));
+  const sellRaw = (BigInt(position.token_amount_raw) * pctBasis) / 10000n;
+  if (sellRaw <= 0n) throw new Error("Nothing to sell.");
+
+  const sellResult = await withSlippageRetry((bps) => sellToken(chain, position.token_address, sellRaw.toString(), bps), settings.slippageBps);
+  const soldFractionUsd = position.position_size_usd * (pct / 100);
+  const gasShare = pct >= 100 ? position.entry_gas_usd : position.entry_gas_usd * (pct / 100);
+  const pnlUsd = sellResult.proceedsUsd - soldFractionUsd - gasShare - sellResult.gasUsd;
+  const pnlPct = (pnlUsd / soldFractionUsd) * 100;
+
+  if (pct >= 100) {
+    closeRealTrade(position.id, {
+      exitPriceUsd,
+      exitReason: "manual_close",
+      pnlUsd,
+      pnlPct,
+      nativeReceived: sellResult.nativeReceived,
+      exitTxHash: sellResult.txHash,
+      exitGasUsd: sellResult.gasUsd,
+    });
+  } else {
+    const remainingRaw = (BigInt(position.token_amount_raw) - sellRaw).toString();
+    const remainingUsd = position.position_size_usd - soldFractionUsd;
+    reduceRealTrade(position.id, { tokenAmountRaw: remainingRaw, positionSizeUsd: remainingUsd });
+  }
+  return { sellResult, pnlUsd, pnlPct, exitPriceUsd, pair };
+}
+
 async function executeManualSell(ctx, context, pct) {
   const { chainKey, tokenAddress } = context;
   const chainDef = CHAINS[chainKey];
-  const chain = { key: chainKey, ...chainDef };
   const lockKey = `${chainKey}:${tokenAddress}`;
   if (!acquireTradeLock(lockKey)) {
     return ctx.reply("A trade for this token is already in progress — please wait.");
@@ -1061,37 +1182,8 @@ async function executeManualSell(ctx, context, pct) {
     const position = getOpenRealTradeByToken(chainKey, tokenAddress);
     if (!position) return ctx.reply("No open position to sell.");
     const settings = loadRealTradingSettings();
-    const sellRaw = (BigInt(position.token_amount_raw) * BigInt(pct)) / 100n;
-    if (sellRaw <= 0n) return ctx.reply("Nothing to sell.");
-    // Live price for the DB record — proceeds/rawAmount would need the
-    // token's decimals to back out correctly, and we already have this
-    // from a real quote instead of assuming 18 decimals.
-    const dexPair = await getBestPair(chainDef.dexscreenerChainId, tokenAddress);
-    const pair = pairSummary(dexPair, tokenAddress);
-    const exitPriceUsd = pair?.priceUsd || position.entry_price_usd;
-
-    const sellResult = await withSlippageRetry((bps) => sellToken(chain, tokenAddress, sellRaw.toString(), bps), settings.slippageBps);
-    const soldFractionUsd = position.position_size_usd * (pct / 100);
-    const gasShare = pct === 100 ? position.entry_gas_usd : position.entry_gas_usd * (pct / 100);
-    const pnlUsd = sellResult.proceedsUsd - soldFractionUsd - gasShare - sellResult.gasUsd;
-    const pnlPct = (pnlUsd / soldFractionUsd) * 100;
-
-    if (pct >= 100) {
-      closeRealTrade(position.id, {
-        exitPriceUsd,
-        exitReason: "manual_sell",
-        pnlUsd,
-        pnlPct,
-        nativeReceived: sellResult.nativeReceived,
-        exitTxHash: sellResult.txHash,
-        exitGasUsd: sellResult.gasUsd,
-      });
-    } else {
-      const remainingRaw = (BigInt(position.token_amount_raw) - sellRaw).toString();
-      const remainingUsd = position.position_size_usd - soldFractionUsd;
-      reduceRealTrade(position.id, { tokenAmountRaw: remainingRaw, positionSizeUsd: remainingUsd });
-    }
-    const caption = `✅ Sold ${pct}% — proceeds ${fmtUsd(sellResult.proceedsUsd)} (${pnlUsd >= 0 ? "+" : ""}${fmtUsd(Math.abs(pnlUsd))}, ${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}%), gas ${fmtUsd(sellResult.gasUsd)}\nTx: \`${sellResult.txHash}\``;
+    const { sellResult, pnlUsd, pnlPct, exitPriceUsd, pair } = await sellPositionPct(position, pct, settings);
+    const caption = `✅ Sold ${fmtSellPct(pct)}% — proceeds ${fmtUsd(sellResult.proceedsUsd)} (${pnlUsd >= 0 ? "+" : ""}${fmtUsd(Math.abs(pnlUsd))}, ${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}%), gas ${fmtUsd(sellResult.gasUsd)}\nTx: \`${sellResult.txHash}\``;
     const imageBuffer = await renderCloseCard({
       chainLabel: chainDef.label,
       symbol: context.symbol,
@@ -1295,6 +1387,28 @@ async function handlePendingAction(ctx, pending, text, digestControls) {
     if (!context) return ctx.reply("Session expired — reopen Manual Trade.");
     await ctx.reply(`Buying ${amount}…`);
     return executeManualBuy(ctx, context, amount);
+  }
+
+  if (pending.type === "realManualSellPct") {
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const pct = Number(text.trim().replace("%", ""));
+    if (!Number.isFinite(pct) || pct <= 0 || pct > 100) {
+      return ctx.reply("That doesn't look like a valid percentage (1-100) — tap Sell custom % again to retry.");
+    }
+    const context = manualTradeContext.get(ctx.chat.id);
+    if (!context) return ctx.reply("Session expired — reopen Manual Trade.");
+    await ctx.reply(`Selling ${fmtSellPct(pct)}%…`);
+    return executeManualSell(ctx, context, pct);
+  }
+
+  if (pending.type === "realActiveSellPct") {
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const pct = Number(text.trim().replace("%", ""));
+    if (!Number.isFinite(pct) || pct <= 0 || pct > 100) {
+      return ctx.reply("That doesn't look like a valid percentage (1-100) — tap Custom % again to retry.");
+    }
+    await ctx.reply(`Selling ${fmtSellPct(pct)}%…`);
+    return performIdSell(ctx, pending.id, pct);
   }
 
   const args = text.trim().split(/\s+/).filter(Boolean);
@@ -1794,6 +1908,32 @@ export function createBot(stats, chainControls, digestControls) {
     await executeManualSell(ctx, context, pct);
   });
 
+  bot.action("realsellcustom", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const context = manualTradeContext.get(ctx.chat.id);
+    if (!context) return ctx.answerCbQuery("Session expired — reopen Manual Trade.");
+    await ctx.answerCbQuery();
+    setPending(ctx.chat.id, { type: "realManualSellPct" });
+    await ctx.reply("Send the % of your position to sell (1-100, e.g. 40):");
+  });
+
+  bot.action("realsellinitial", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const context = manualTradeContext.get(ctx.chat.id);
+    if (!context) return ctx.answerCbQuery("Session expired — reopen Manual Trade.");
+    const position = getOpenRealTradeByToken(context.chainKey, context.tokenAddress);
+    if (!position) return ctx.answerCbQuery("No open position to sell.");
+    const chainDef = CHAINS[context.chainKey];
+    const dexPair = await getBestPair(chainDef.dexscreenerChainId, context.tokenAddress);
+    const pair = pairSummary(dexPair, context.tokenAddress);
+    if (!pair || !isSanePrice(pair.priceUsd)) return ctx.answerCbQuery("Couldn't fetch current price — try again.");
+    const pct = computeInitialRecoveryPct(position.entry_price_usd, pair.priceUsd);
+    await ctx.answerCbQuery(`Selling ${fmtSellPct(pct)}% to recover initial…`);
+    await executeManualSell(ctx, context, pct);
+  });
+
   bot.action(/^realconfirm:enablechain:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
@@ -1845,10 +1985,7 @@ export function createBot(stats, chainControls, digestControls) {
   bot.action("menu:realactive", async (ctx) => {
     await ctx.answerCbQuery();
     if (!(await requireRealTradingUnlock(ctx))) return;
-    const { trades, totalUnrealizedUsd } = await getOpenRealTradesWithLivePnl();
-    trades.sort((a, b) => (b.pnlPct ?? -Infinity) - (a.pnlPct ?? -Infinity));
-    const walletBalances = await getWalletBalancesForTrades(trades);
-    await safeEdit(ctx, buildActiveTradesMessage({ trades, totalUnrealizedUsd, walletBalances, mode: "real" }), realActiveTradesKeyboard(trades));
+    await renderActiveTradesView(ctx);
   });
 
   bot.action("realconfirm:closeall", async (ctx) => {
@@ -1887,57 +2024,67 @@ export function createBot(stats, chainControls, digestControls) {
     );
   });
 
-  // Sells a single open real position — unlike realclosall, this leaves
-  // every other open position untouched. Same never-mark-closed-without-a-
-  // confirmed-sale discipline as the bulk close.
-  bot.action(/^realclosetrade:(\d+)$/, async (ctx) => {
-    if (!isAdmin(ctx)) {
-      await ctx.answerCbQuery("Not authorized.");
-      return;
+  // Opens the sell-percentage menu for a single open position — tapped
+  // from the Active Trades list. Selling itself happens in the handlers
+  // below (realsellidpct / realsellidcustom / realsellidinitial), leaving
+  // every other open position untouched either way.
+  bot.action(/^realsellmenu:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const id = Number(ctx.match[1]);
+    const t = getRealTradeById(id);
+    if (!t || t.status !== "open") {
+      return safeEdit(ctx, "Already closed or not found.", realActiveTradesKeyboard(getOpenRealTrades()));
     }
+    await safeEdit(
+      ctx,
+      `🛑 *Sell ${escapeMd(t.symbol) || t.token_address}?*\n\nOpen size: ${fmtUsd(t.position_size_usd)} — choose how much to sell.`,
+      realSellMenuKeyboard(id)
+    );
+  });
+
+  bot.action(/^realsellidpct:(\d+):(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const id = Number(ctx.match[1]);
+    const pct = Number(ctx.match[2]);
+    await ctx.answerCbQuery(`Selling ${pct}%…`);
+    await performIdSell(ctx, id, pct);
+  });
+
+  bot.action(/^realsellidcustom:(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
     if (!(await requireRealTradingUnlock(ctx))) return;
     const id = Number(ctx.match[1]);
     const t = getRealTradeById(id);
     if (!t || t.status !== "open") {
       await ctx.answerCbQuery("Already closed or not found.");
-      return;
+      return safeEdit(ctx, "Already closed or not found.", realActiveTradesKeyboard(getOpenRealTrades()));
     }
-    const lockKey = `${t.chain}:${t.token_address}`;
-    if (!acquireTradeLock(lockKey)) {
-      await ctx.answerCbQuery("A trade for this token is already in progress — please wait.");
-      return;
+    await ctx.answerCbQuery();
+    setPending(ctx.chat.id, { type: "realActiveSellPct", id });
+    await ctx.reply(`Send the % of ${escapeMd(t.symbol) || t.token_address} to sell (1-100, e.g. 40):`);
+  });
+
+  bot.action(/^realsellidinitial:(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const id = Number(ctx.match[1]);
+    const t = getRealTradeById(id);
+    if (!t || t.status !== "open") {
+      await ctx.answerCbQuery("Already closed or not found.");
+      return safeEdit(ctx, "Already closed or not found.", realActiveTradesKeyboard(getOpenRealTrades()));
     }
-    await ctx.answerCbQuery(`Selling #${id}…`);
-    const settings = loadRealTradingSettings();
     const chainDef = CHAINS[t.chain];
-    try {
-      const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
-      const pair = pairSummary(dexPair, t.token_address);
-      if (!pair || !isSanePrice(pair.priceUsd)) {
-        return safeEdit(ctx, `⚠️ Couldn't fetch a current price for ${escapeMd(t.symbol) || t.token_address} — left open.`, realActiveTradesKeyboard(getOpenRealTrades()));
-      }
-      const chain = { key: t.chain, ...chainDef };
-      const sellResult = await withSlippageRetry((bps) => sellToken(chain, t.token_address, t.token_amount_raw, bps), settings.slippageBps);
-      const pnlUsd = sellResult.proceedsUsd - t.position_size_usd - t.entry_gas_usd - sellResult.gasUsd;
-      const pnlPct = (pnlUsd / t.position_size_usd) * 100;
-      closeRealTrade(id, {
-        exitPriceUsd: pair.priceUsd,
-        exitReason: "manual_close",
-        pnlUsd,
-        pnlPct,
-        nativeReceived: sellResult.nativeReceived,
-        exitTxHash: sellResult.txHash,
-        exitGasUsd: sellResult.gasUsd,
-      });
-    } catch (err) {
-      return safeEdit(ctx, `⚠️ Failed to sell #${id}: ${err.message}`, realActiveTradesKeyboard(getOpenRealTrades()));
-    } finally {
-      releaseTradeLock(lockKey);
+    const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
+    const pair = pairSummary(dexPair, t.token_address);
+    if (!pair || !isSanePrice(pair.priceUsd)) {
+      await ctx.answerCbQuery("Couldn't fetch a current price — try again.");
+      return;
     }
-    const { trades, totalUnrealizedUsd } = await getOpenRealTradesWithLivePnl();
-    trades.sort((a, b) => (b.pnlPct ?? -Infinity) - (a.pnlPct ?? -Infinity));
-    const walletBalances = await getWalletBalancesForTrades(trades);
-    await safeEdit(ctx, buildActiveTradesMessage({ trades, totalUnrealizedUsd, walletBalances, mode: "real" }), realActiveTradesKeyboard(trades));
+    const pct = computeInitialRecoveryPct(t.entry_price_usd, pair.priceUsd);
+    await ctx.answerCbQuery(`Selling ${fmtSellPct(pct)}% to recover initial…`);
+    await performIdSell(ctx, id, pct);
   });
 
   // Write off a position that's confirmed genuinely unsellable (e.g. a
@@ -1945,7 +2092,7 @@ export function createBot(stats, chainControls, digestControls) {
   // confirmed live on NACH/ENDM: a plain transfer succeeds, but any sell
   // attempt reverts with "Transfer amount exceeds the maxTxAmount" at ANY
   // size, so it can never clear the normal sell path). Records the full
-  // loss with no sell attempt, unlike realclosetrade — use with care, this
+  // loss with no sell attempt, unlike the sell menu — use with care, this
   // should only be tapped after independently confirming the position truly
   // can't be sold, not as a shortcut around a slow/failing sell.
   bot.action(/^realwriteoffconfirm:(\d+)$/, async (ctx) => {
@@ -1996,10 +2143,7 @@ export function createBot(stats, chainControls, digestControls) {
     } finally {
       releaseTradeLock(lockKey);
     }
-    const { trades, totalUnrealizedUsd } = await getOpenRealTradesWithLivePnl();
-    trades.sort((a, b) => (b.pnlPct ?? -Infinity) - (a.pnlPct ?? -Infinity));
-    const walletBalances = await getWalletBalancesForTrades(trades);
-    await safeEdit(ctx, buildActiveTradesMessage({ trades, totalUnrealizedUsd, walletBalances, mode: "real" }), realActiveTradesKeyboard(trades));
+    await renderActiveTradesView(ctx);
   });
 
   bot.action(/^realedit:(.+)$/, async (ctx) => {
