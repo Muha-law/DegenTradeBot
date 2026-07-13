@@ -1,14 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getDataDir } from "./dataDir.js";
+import { getActiveChainDefs } from "./chainSettings.js";
 
 const settingsPath = path.join(getDataDir(), "realTradingSettings.json");
 
 const DEFAULTS = {
-  // Starts OFF regardless of what's in an existing settings file at first
-  // creation — real-fund trading must be turned on explicitly from the bot
-  // menu, never on by default.
-  enabled: false,
+  // Real-fund trading is opt-in per chain, and starts with none enabled —
+  // must be turned on explicitly (per chain) from the bot menu, never on by
+  // default. See enabledChains helpers below.
+  enabledChains: [],
   totalBudgetUsd: 20,
   positionSizeUsd: 2,
   takeProfitPct: 100,
@@ -29,12 +30,38 @@ const DEFAULTS = {
 
 export function loadRealTradingSettings() {
   if (!fs.existsSync(settingsPath)) {
-    saveRealTradingSettings(DEFAULTS);
-    return { ...DEFAULTS };
+    const fresh = { ...DEFAULTS };
+    saveRealTradingSettings(fresh);
+    return fresh;
   }
-  return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(settingsPath, "utf8")) };
+  const raw = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  const merged = { ...DEFAULTS, ...raw };
+  if (!Array.isArray(raw.enabledChains)) {
+    // Migrating from the old single global `enabled` boolean — preserve
+    // whichever chains were actively watched at the time, so this upgrade
+    // doesn't silently turn off real trading that was already live.
+    merged.enabledChains = raw.enabled ? getActiveChainDefs().map((c) => c.key) : [];
+  }
+  delete merged.enabled;
+  return merged;
 }
 
 export function saveRealTradingSettings(settings) {
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+}
+
+export function isChainTradingEnabled(settings, chainKey) {
+  return (settings.enabledChains || []).includes(chainKey);
+}
+
+export function isAnyChainTradingEnabled(settings) {
+  return (settings.enabledChains || []).length > 0;
+}
+
+export function setChainTradingEnabled(settings, chainKey, enabled) {
+  const set = new Set(settings.enabledChains || []);
+  if (enabled) set.add(chainKey);
+  else set.delete(chainKey);
+  settings.enabledChains = [...set];
+  return settings;
 }

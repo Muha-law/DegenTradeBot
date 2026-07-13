@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getDataDir } from "./dataDir.js";
+import { getActiveChainDefs } from "./chainSettings.js";
 
 const settingsPath = path.join(getDataDir(), "paperTradingSettings.json");
 
-const DEFAULTS = {
-  enabled: true,
+const STATIC_DEFAULTS = {
   totalBudgetUsd: 10000,
   positionSizeUsd: 500,
   takeProfitPct: 100,
@@ -24,12 +24,39 @@ const DEFAULTS = {
 
 export function loadPaperTradingSettings() {
   if (!fs.existsSync(settingsPath)) {
-    savePaperTradingSettings(DEFAULTS);
-    return { ...DEFAULTS };
+    // Paper trading previously defaulted to globally ON — preserve that by
+    // starting every currently-watched chain enabled, rather than none.
+    const fresh = { ...STATIC_DEFAULTS, enabledChains: getActiveChainDefs().map((c) => c.key) };
+    savePaperTradingSettings(fresh);
+    return fresh;
   }
-  return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(settingsPath, "utf8")) };
+  const raw = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  const merged = { ...STATIC_DEFAULTS, enabledChains: [], ...raw };
+  if (!Array.isArray(raw.enabledChains)) {
+    // Migrating from the old single global `enabled` boolean — preserve
+    // current behavior for whichever chains were actively watched.
+    merged.enabledChains = raw.enabled !== false ? getActiveChainDefs().map((c) => c.key) : [];
+  }
+  delete merged.enabled;
+  return merged;
 }
 
 export function savePaperTradingSettings(settings) {
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+}
+
+export function isChainTradingEnabled(settings, chainKey) {
+  return (settings.enabledChains || []).includes(chainKey);
+}
+
+export function isAnyChainTradingEnabled(settings) {
+  return (settings.enabledChains || []).length > 0;
+}
+
+export function setChainTradingEnabled(settings, chainKey, enabled) {
+  const set = new Set(settings.enabledChains || []);
+  if (enabled) set.add(chainKey);
+  else set.delete(chainKey);
+  settings.enabledChains = [...set];
+  return settings;
 }

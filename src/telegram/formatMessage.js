@@ -356,11 +356,20 @@ export function buildHoneypotCaughtMessage({ chain, tokenAddress, name, symbol, 
   ].join("\n");
 }
 
+// Trading is enabled per chain now, not globally — summarize which chains
+// (if any) are actually on rather than a single running/paused boolean.
+function formatChainStatusLine(settings, onEmoji, onWord, offWord) {
+  const enabled = settings.enabledChains || [];
+  if (enabled.length === 0) return `Status: ⚪️ ${offWord} on every chain`;
+  const labels = enabled.map((key) => CHAINS[key]?.label || key);
+  return `Status: ${onEmoji} ${onWord} on ${labels.join(", ")}`;
+}
+
 export function buildPaperTradingSummary({ settings, stats, unrealizedPnlUsd }) {
   const lines = [
     "📈 *Paper Trading*",
     "",
-    `Status: ${settings.enabled ? "🟢 running" : "⏸ paused"}`,
+    formatChainStatusLine(settings, "🟢", "running", "paused"),
     `Budget: ${fmtUsd(settings.totalBudgetUsd)} total | ${fmtUsd(settings.positionSizeUsd)}/trade`,
     `Target: +${settings.takeProfitPct}% | Stop: ${settings.stopLossPct}%`,
     `🪖 Super Comando: ${settings.superComandoEnabled ? "🟢 ON" : "⚪️ off"}`,
@@ -382,7 +391,7 @@ export function buildRealTradingSummary({ settings, stats, unrealizedPnlUsd, wal
   const lines = [
     "💰 *Real Funds Trading*",
     "",
-    `Status: ${settings.enabled ? "🔴 LIVE — real money" : "⚪️ off"}`,
+    formatChainStatusLine(settings, "🔴", "LIVE — real money", "off"),
     `Wallet: \`${walletAddress || "not configured"}\``,
   ];
   if (walletBalances?.length) {

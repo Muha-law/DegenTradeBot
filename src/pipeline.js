@@ -164,8 +164,8 @@ export async function evaluateToken(bot, { chain, dexName, pairAddress, tokenAdd
     priceUsd: riskResult.pair?.priceUsd,
     marketCapUsd: riskResult.pair?.marketCapUsd,
   });
-  // No-ops unless realTradingSettings.enabled is explicitly true and a
-  // wallet is configured — see realTrading.js.
+  // No-ops unless this chain is explicitly enabled in realTradingSettings
+  // and a wallet is configured — see realTrading.js.
   await openRealTradeIfRoom(bot, {
     chain,
     tokenAddress,

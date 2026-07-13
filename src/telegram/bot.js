@@ -42,8 +42,20 @@ import {
 import { buildDigestEntries } from "../watchlist.js";
 import { loadDigestSettings, saveDigestSettings } from "../digestSettings.js";
 import { loadPresets, applyPreset } from "../presets.js";
-import { loadPaperTradingSettings, savePaperTradingSettings } from "../paperTradingSettings.js";
-import { loadRealTradingSettings, saveRealTradingSettings } from "../realTradingSettings.js";
+import {
+  loadPaperTradingSettings,
+  savePaperTradingSettings,
+  isChainTradingEnabled as isPaperChainEnabled,
+  isAnyChainTradingEnabled as isAnyPaperChainEnabled,
+  setChainTradingEnabled as setPaperChainEnabled,
+} from "../paperTradingSettings.js";
+import {
+  loadRealTradingSettings,
+  saveRealTradingSettings,
+  isChainTradingEnabled as isRealChainEnabled,
+  isAnyChainTradingEnabled as isAnyRealChainEnabled,
+  setChainTradingEnabled as setRealChainEnabled,
+} from "../realTradingSettings.js";
 import { hasWallet, getWalletAddress, getNativeBalance, resolveEnsName } from "../wallet.js";
 import { sellToken, buyTokenWithNativeAmount, withSlippageRetry } from "../execution/swapExecutor.js";
 import { estimateV2PriceImpact } from "../risk/priceImpact.js";
@@ -391,7 +403,7 @@ async function requireRealTradingUnlock(ctx) {
 
 function mainMenuKeyboard() {
   const paused = isPaused();
-  const tokenRealEnabled = loadRealTradingSettings().enabled;
+  const tokenRealEnabled = isAnyRealChainEnabled(loadRealTradingSettings());
   const nftRealEnabled = config.openseaApiKey ? loadNftRealTradingSettings().enabled : false;
   return Markup.inlineKeyboard([
     [Markup.button.callback(paused ? "▶️ Bot: OFF (tap to turn on)" : "⏸ Bot: ON (tap to turn off)", "menu:toggleBot")],
@@ -523,9 +535,23 @@ function nftRealEnableConfirmKeyboard() {
   ]);
 }
 
+// One toggle button per actively-watched chain, instead of a single global
+// on/off — lets paper trading run on some chains and not others.
+function chainToggleRows(settings, isEnabledFn, actionPrefix, onEmoji) {
+  const chains = getActiveChainDefs();
+  if (chains.length === 0) {
+    return [[Markup.button.callback("⚠️ No chains watched — enable one in ⛓ Chains", "menu:chains")]];
+  }
+  return chains.map((c) => {
+    const on = isEnabledFn(settings, c.key);
+    const label = `${on ? onEmoji : "⚪️"} ${c.label}: ${on ? "ON (tap to pause)" : "off (tap to enable)"}`;
+    return [Markup.button.callback(label, `${actionPrefix}:${c.key}`)];
+  });
+}
+
 function paperTradingKeyboard(settings) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback(settings.enabled ? "⏸ Pause" : "▶️ Resume", "papertoggle")],
+    ...chainToggleRows(settings, isPaperChainEnabled, "papertogglechain", "🟢"),
     [Markup.button.callback(`Budget: $${settings.totalBudgetUsd}`, "paperedit:totalBudgetUsd")],
     [Markup.button.callback(`Position size: $${settings.positionSizeUsd}`, "paperedit:positionSizeUsd")],
     [Markup.button.callback(`Take profit: +${settings.takeProfitPct}%`, "paperedit:takeProfitPct")],
@@ -548,9 +574,18 @@ function activeTradesKeyboard(trades = []) {
 }
 
 function realTradingKeyboard(settings, walletReady) {
-  const toggleAction = settings.enabled ? "realtoggle" : "realconfirm:enable";
+  const chains = getActiveChainDefs();
+  const chainRows =
+    chains.length > 0
+      ? chains.map((c) => {
+          const on = isRealChainEnabled(settings, c.key);
+          const action = on ? `realtogglechain:${c.key}` : `realconfirm:enablechain:${c.key}`;
+          const label = `${on ? "🔴" : "⚪️"} ${c.label}: ${on ? "LIVE (tap to pause)" : "off (tap to enable)"}`;
+          return [Markup.button.callback(label, action)];
+        })
+      : [[Markup.button.callback("⚠️ No chains watched — enable one in ⛓ Chains", "menu:chains")]];
   const rows = [
-    [Markup.button.callback(settings.enabled ? "⏸ Pause (real money)" : "▶️ Enable REAL trading", toggleAction)],
+    ...chainRows,
     [Markup.button.callback(`Budget: $${settings.totalBudgetUsd}`, "realedit:totalBudgetUsd")],
     [Markup.button.callback(`Position size: $${settings.positionSizeUsd}`, "realedit:positionSizeUsd")],
     [Markup.button.callback(`Take profit: +${settings.takeProfitPct}%`, "realedit:takeProfitPct")],
@@ -558,15 +593,16 @@ function realTradingKeyboard(settings, walletReady) {
     [Markup.button.callback(`Slippage: ${(settings.slippageBps / 100).toFixed(1)}%`, "realedit:slippageBps")],
     [Markup.button.callback(`🪖 Super Comando: ${settings.superComandoEnabled ? "ON (tap to turn off)" : "off (tap to turn on)"}`, "realcomandotoggle")],
     [Markup.button.callback(`🪖 Comando max call volume: $${settings.superComandoMaxCallVolumeUsd}`, "realedit:superComandoMaxCallVolumeUsd")],
-    [Markup.button.callback("📋 Active trades", "menu:realactive"), Markup.button.callback("📜 Closed trades", "menu:realclosed")],
-    [Markup.button.callback("🛑 Close ALL trades (sells for real)", "realconfirm:closeall")],
-    [Markup.button.callback("🔄 Refresh", "menu:realtrading"), Markup.button.callback("🔙 Menu", "menu:home")],
   ];
   // Manual trading terminal only appears once real trading is actually
-  // enabled — it's meaningless (and riskier to expose) while it's off.
-  if (settings.enabled) {
-    rows.splice(6, 0, [Markup.button.callback("🎯 Manual Trade", "menu:realmanual")]);
+  // enabled on at least one chain — it's meaningless (and riskier to
+  // expose) while every chain is off.
+  if (isAnyRealChainEnabled(settings)) {
+    rows.push([Markup.button.callback("🎯 Manual Trade", "menu:realmanual")]);
   }
+  rows.push([Markup.button.callback("📋 Active trades", "menu:realactive"), Markup.button.callback("📜 Closed trades", "menu:realclosed")]);
+  rows.push([Markup.button.callback("🛑 Close ALL trades (sells for real)", "realconfirm:closeall")]);
+  rows.push([Markup.button.callback("🔄 Refresh", "menu:realtrading"), Markup.button.callback("🔙 Menu", "menu:home")]);
   if (!walletReady) {
     rows.unshift([Markup.button.callback("⚠️ No wallet configured — see .env", "menu:realtrading")]);
   }
@@ -601,9 +637,9 @@ function realActiveTradesKeyboard(trades = []) {
   return Markup.inlineKeyboard(rows);
 }
 
-function realEnableConfirmKeyboard() {
+function realEnableConfirmKeyboard(chainKey) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("✅ Yes, trade with REAL money", "realtoggle")],
+    [Markup.button.callback("✅ Yes, trade with REAL money", `realtogglechain:${chainKey}`)],
     [Markup.button.callback("❌ Cancel", "menu:realtrading")],
   ]);
 }
@@ -1541,15 +1577,18 @@ export function createBot(stats, chainControls, digestControls) {
     await safeEdit(ctx, buildPaperTradingSummary({ settings, stats, unrealizedPnlUsd: totalUnrealizedUsd }), paperTradingKeyboard(settings));
   });
 
-  bot.action("papertoggle", async (ctx) => {
+  bot.action(/^papertogglechain:(.+)$/, async (ctx) => {
     if (!isAdmin(ctx)) {
       await ctx.answerCbQuery("Not authorized.");
       return;
     }
+    const chainKey = ctx.match[1];
+    const chainLabel = CHAINS[chainKey]?.label || chainKey;
     const settings = loadPaperTradingSettings();
-    settings.enabled = !settings.enabled;
+    const nowEnabled = !isPaperChainEnabled(settings, chainKey);
+    setPaperChainEnabled(settings, chainKey, nowEnabled);
     savePaperTradingSettings(settings);
-    await ctx.answerCbQuery(settings.enabled ? "Paper trading resumed" : "Paper trading paused");
+    await ctx.answerCbQuery(nowEnabled ? `Paper trading resumed on ${chainLabel}` : `Paper trading paused on ${chainLabel}`);
     const stats = getPaperTradingStats();
     const { totalUnrealizedUsd } = await getOpenTradesWithLivePnl();
     await safeEdit(ctx, buildPaperTradingSummary({ settings, stats, unrealizedPnlUsd: totalUnrealizedUsd }), paperTradingKeyboard(settings));
@@ -1699,7 +1738,7 @@ export function createBot(stats, chainControls, digestControls) {
     if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
     if (!(await requireRealTradingUnlock(ctx))) return;
     const settings = loadRealTradingSettings();
-    if (!settings.enabled) return ctx.reply("Manual Trade is only available once real trading is enabled.");
+    if (!isAnyRealChainEnabled(settings)) return ctx.reply("Manual Trade is only available once real trading is enabled on at least one chain.");
     setPending(ctx.chat.id, { type: "realManualToken" });
     await ctx.reply("Paste the contract address you want to trade.");
   });
@@ -1741,33 +1780,38 @@ export function createBot(stats, chainControls, digestControls) {
     await executeManualSell(ctx, context, pct);
   });
 
-  bot.action("realconfirm:enable", async (ctx) => {
+  bot.action(/^realconfirm:enablechain:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
     if (!(await requireRealTradingUnlock(ctx))) return;
     if (!hasWallet()) return safeEdit(ctx, "⚠️ No wallet configured. Add WALLET_PRIVATE_KEY to .env first.", realTradingKeyboard(loadRealTradingSettings(), false));
+    const chainKey = ctx.match[1];
+    const chainLabel = CHAINS[chainKey]?.label || chainKey;
     const settings = loadRealTradingSettings();
     await safeEdit(
       ctx,
-      `⚠️ *This trades with real money.*\n\nPosition size: $${settings.positionSizeUsd} | Budget: $${settings.totalBudgetUsd}\n\nEvery call that passes your filters will attempt a real on-chain buy. Continue?`,
-      realEnableConfirmKeyboard()
+      `⚠️ *This trades with real money on ${chainLabel}.*\n\nPosition size: $${settings.positionSizeUsd} | Budget: $${settings.totalBudgetUsd}\n\nEvery call on ${chainLabel} that passes your filters will attempt a real on-chain buy. Continue?`,
+      realEnableConfirmKeyboard(chainKey)
     );
   });
 
-  bot.action("realtoggle", async (ctx) => {
+  bot.action(/^realtogglechain:(.+)$/, async (ctx) => {
     if (!isAdmin(ctx)) {
       await ctx.answerCbQuery("Not authorized.");
       return;
     }
     if (!(await requireRealTradingUnlock(ctx))) return;
+    const chainKey = ctx.match[1];
+    const chainLabel = CHAINS[chainKey]?.label || chainKey;
     const settings = loadRealTradingSettings();
-    if (!settings.enabled && !hasWallet()) {
+    const nowEnabled = !isRealChainEnabled(settings, chainKey);
+    if (nowEnabled && !hasWallet()) {
       await ctx.answerCbQuery("No wallet configured.");
       return safeEdit(ctx, "⚠️ No wallet configured. Add WALLET_PRIVATE_KEY to .env first.", realTradingKeyboard(settings, false));
     }
-    settings.enabled = !settings.enabled;
+    setRealChainEnabled(settings, chainKey, nowEnabled);
     saveRealTradingSettings(settings);
-    await ctx.answerCbQuery(settings.enabled ? "🔴 REAL trading enabled" : "Real trading paused");
+    await ctx.answerCbQuery(nowEnabled ? `🔴 REAL trading enabled on ${chainLabel}` : `Real trading paused on ${chainLabel}`);
     await renderRealTradingView(ctx);
   });
 

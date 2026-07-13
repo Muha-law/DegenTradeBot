@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import { CHAINS } from "./chains.js";
 import { isPaused } from "./botState.js";
-import { loadPaperTradingSettings } from "./paperTradingSettings.js";
+import { loadPaperTradingSettings, isChainTradingEnabled } from "./paperTradingSettings.js";
 import { getBestPair, pairSummary } from "./risk/dexscreener.js";
 import { shouldExitMooner } from "./ai/superComando.js";
 import { checkFreshLiquidity } from "./filters/filter.js";
@@ -71,7 +71,7 @@ function qualifiesForComando(trade, settings) {
 // (e.g. no usable entry price).
 export async function openPaperTradeIfRoom(bot, { chain, tokenAddress, symbol, name, priceUsd, marketCapUsd }) {
   const settings = loadPaperTradingSettings();
-  if (!settings.enabled) return;
+  if (!isChainTradingEnabled(settings, chain.key)) return;
   if (!isSanePrice(priceUsd)) return;
 
   const stats = getPaperTradingStats();
@@ -131,8 +131,8 @@ export function startPaperTradeChecker(bot) {
   const task = cron.schedule(CHECK_CRON, async () => {
     if (isPaused()) return;
     const settings = loadPaperTradingSettings();
-    if (!settings.enabled) return;
-
+    // Deliberately NOT gated on any chain's enabledChains here — see the
+    // matching comment in realTrading.js's checker.
     const open = getOpenPaperTrades();
     for (const t of open) {
       const chainDef = CHAINS[t.chain];

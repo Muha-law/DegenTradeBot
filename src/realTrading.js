@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import { CHAINS } from "./chains.js";
 import { isPaused } from "./botState.js";
-import { loadRealTradingSettings } from "./realTradingSettings.js";
+import { loadRealTradingSettings, isChainTradingEnabled } from "./realTradingSettings.js";
 import { getBestPair, pairSummary } from "./risk/dexscreener.js";
 import { checkFreshLiquidity } from "./filters/filter.js";
 import { shouldExitMooner } from "./ai/superComando.js";
@@ -61,11 +61,12 @@ function qualifiesForComando(trade, settings) {
 
 // Called whenever a real call passes the filter. Executes an actual on-chain
 // buy, budget-capped by realTradingSettings, only if real trading is
-// explicitly enabled and a wallet is configured. No-ops otherwise — this
-// never runs alongside paper trading being the only thing enabled.
+// explicitly enabled for THIS chain and a wallet is configured. No-ops
+// otherwise — this never runs alongside paper trading being the only thing
+// enabled.
 export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, name, priceUsd, marketCapUsd }) {
   const settings = loadRealTradingSettings();
-  if (!settings.enabled) return;
+  if (!isChainTradingEnabled(settings, chain.key)) return;
   if (!hasWallet()) return;
   if (!isSanePrice(priceUsd)) return;
   if (!chain.routerAddress) {
@@ -230,8 +231,10 @@ export function startRealTradeChecker(bot) {
   const task = cron.schedule(CHECK_CRON, async () => {
     if (isPaused()) return;
     const settings = loadRealTradingSettings();
-    if (!settings.enabled) return;
-
+    // Deliberately NOT gated on any chain's enabledChains here — an already-
+    // open position must keep being monitored/exited even if that chain's
+    // real trading was since paused, otherwise pausing a chain mid-trade
+    // would strand the position with no way to ever hit stop-loss.
     const open = getOpenRealTrades();
     for (const t of open) {
       const chainDef = CHAINS[t.chain];
