@@ -5,8 +5,8 @@ import { isPaused } from "./botState.js";
 import { loadDigestSettings } from "./digestSettings.js";
 import { fetchCallPct, buildDigestEntries } from "./watchlist.js";
 import { getActiveCalls, updateCallProgress, updateCallMilestone, deactivateCall } from "./store/db.js";
-import { postUpdate } from "./telegram/bot.js";
-import { buildMilestoneMessage, buildFollowUpMessage, buildWatchlistDigest } from "./telegram/formatMessage.js";
+import { postUpdate, watchlistKeyboard } from "./telegram/bot.js";
+import { buildMilestoneMessage, buildFollowUpMessage, buildWatchlistDigest, WATCHLIST_PAGE_SIZE } from "./telegram/formatMessage.js";
 
 const MILESTONES = [50, 100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 3000, 5000, 10000];
 const CHECK_CRON = "*/2 * * * *"; // how often we check for milestone/follow-up triggers
@@ -123,7 +123,11 @@ export function startWatchlistDigest(bot) {
     try {
       const entries = await buildDigestEntries();
       if (entries.length === 0) return;
-      await postUpdate(bot, buildWatchlistDigest(entries));
+      // Same numbered remove-buttons as the interactive /watchlist view —
+      // matches page 0 of that view exactly, since this digest has no
+      // offset/pagination of its own.
+      const shown = entries.slice(0, WATCHLIST_PAGE_SIZE);
+      await postUpdate(bot, buildWatchlistDigest(entries), watchlistKeyboard(0, entries.length, shown));
     } catch (err) {
       console.error("[watchlistDigest] failed to send:", err.message);
     }

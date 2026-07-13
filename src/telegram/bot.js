@@ -28,6 +28,7 @@ import {
   countBotUsers,
   getRecentCalls,
   deactivateCallByToken,
+  deactivateAllCalls,
   toggleCallPinned,
   getWatchedWallets,
   addWatchedWallet,
@@ -688,12 +689,24 @@ function renderStatusText(stats) {
   ].join("\n");
 }
 
-async function renderWatchlistPage(offset = 0) {
+export async function renderWatchlistPage(offset = 0) {
   const entries = await buildDigestEntries();
-  return { text: buildWatchlistDigest(entries, offset), total: entries.length };
+  const shown = entries.slice(offset, offset + WATCHLIST_PAGE_SIZE);
+  return { text: buildWatchlistDigest(entries, offset), total: entries.length, shown };
 }
 
-function watchlistKeyboard(offset, total) {
+// One numbered remove-button per entry shown on this page (matching the
+// digest's own 1-based numbering, offset + i + 1) — lets you tap a number
+// instead of pasting the contract address into menu:removecall. 5 per row
+// keeps a full 20-entry page to 4 rows instead of 20.
+function watchlistRemoveButtonRows(offset, shown) {
+  const buttons = shown.map((e, i) => Markup.button.callback(`❌${offset + i + 1}`, `watchlistremove:${e.tokenAddress}`));
+  const rows = [];
+  for (let i = 0; i < buttons.length; i += 5) rows.push(buttons.slice(i, i + 5));
+  return rows;
+}
+
+export function watchlistKeyboard(offset, total, shown = []) {
   const { intervalMinutes } = loadDigestSettings();
   const navRow = [];
   if (offset > 0) navRow.push(Markup.button.callback("⬅️ Previous", `watchlistpage:${Math.max(0, offset - WATCHLIST_PAGE_SIZE)}`));
@@ -702,6 +715,8 @@ function watchlistKeyboard(offset, total) {
   const rows = [];
   if (navRow.length) rows.push(navRow);
   rows.push([Markup.button.callback("🔄 Update", "watchlistpage:0")]);
+  rows.push(...watchlistRemoveButtonRows(offset, shown));
+  if (total > 0) rows.push([Markup.button.callback("🗑 Remove ALL", "menu:watchlistremoveall")]);
   rows.push([Markup.button.callback("📌 Pin/Unpin Call", "menu:pincall"), Markup.button.callback("🗑 Remove Call", "menu:removecall")]);
   rows.push([Markup.button.callback(`⏱ Auto-update every ${intervalMinutes}m (tap to change)`, "menu:digestinterval")]);
   rows.push([Markup.button.callback("🔙 Menu", "menu:home")]);
@@ -1382,15 +1397,51 @@ export function createBot(stats, chainControls, digestControls) {
 
   bot.action("menu:watchlist", async (ctx) => {
     await ctx.answerCbQuery();
-    const { text, total } = await renderWatchlistPage(0);
-    await safeEdit(ctx, text, watchlistKeyboard(0, total));
+    const { text, total, shown } = await renderWatchlistPage(0);
+    await safeEdit(ctx, text, watchlistKeyboard(0, total, shown));
   });
 
   bot.action(/^watchlistpage:(\d+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const offset = Number(ctx.match[1]);
-    const { text, total } = await renderWatchlistPage(offset);
-    await safeEdit(ctx, text, watchlistKeyboard(offset, total));
+    const { text, total, shown } = await renderWatchlistPage(offset);
+    await safeEdit(ctx, text, watchlistKeyboard(offset, total, shown));
+  });
+
+  bot.action(/^watchlistremove:(.+)$/, async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    const tokenAddress = ctx.match[1];
+    const removed = deactivateCallByToken(tokenAddress);
+    await ctx.answerCbQuery(removed > 0 ? "Removed from Watchlist" : "Already removed / not found");
+    const { text, total, shown } = await renderWatchlistPage(0);
+    await safeEdit(ctx, text, watchlistKeyboard(0, total, shown));
+  });
+
+  bot.action("menu:watchlistremoveall", async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    await safeEdit(
+      ctx,
+      "🗑 Remove *every* unpinned call from the Watchlist? Pinned calls are left untouched — unpin them first if you want those gone too.",
+      Markup.inlineKeyboard([
+        [Markup.button.callback("✅ Yes, clear the Watchlist", "watchlistremoveall:confirm")],
+        [Markup.button.callback("❌ Cancel", "menu:watchlist")],
+      ])
+    );
+  });
+
+  bot.action("watchlistremoveall:confirm", async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    const removed = deactivateAllCalls();
+    await ctx.answerCbQuery(`Cleared ${removed} call(s)`);
+    const { text, total, shown } = await renderWatchlistPage(0);
+    await safeEdit(ctx, text, watchlistKeyboard(0, total, shown));
   });
 
   bot.action("menu:removecall", async (ctx) => {
@@ -2097,8 +2148,8 @@ export function createBot(stats, chainControls, digestControls) {
   // Slash commands still work underneath the buttons, for muscle memory.
   bot.command("status", (ctx) => ctx.reply(renderStatusText(stats), { parse_mode: "Markdown", ...backKeyboard() }));
   bot.command("watchlist", async (ctx) => {
-    const { text, total } = await renderWatchlistPage(0);
-    ctx.reply(text, { parse_mode: "Markdown", ...watchlistKeyboard(0, total) });
+    const { text, total, shown } = await renderWatchlistPage(0);
+    ctx.reply(text, { parse_mode: "Markdown", ...watchlistKeyboard(0, total, shown) });
   });
   bot.command(["tracklist", "tracked"], async (ctx) => {
     const text = await renderTracklistText();
@@ -2307,11 +2358,11 @@ function truncateForTelegram(text) {
 // channels), independently — one destination failing (e.g. bot removed as
 // channel admin) must not block delivery to the others. Returns the primary
 // chat's message_id, since that's the only one anything else references.
-async function broadcast(bot, message) {
+async function broadcast(bot, message, extra = {}) {
   let primaryMessageId = null;
   for (const destination of config.telegram.destinations) {
     try {
-      const sent = await bot.telegram.sendMessage(destination, message, { parse_mode: "Markdown" });
+      const sent = await bot.telegram.sendMessage(destination, message, { parse_mode: "Markdown", ...extra });
       if (destination === config.telegram.chatId) primaryMessageId = sent.message_id;
     } catch (err) {
       console.error(`Failed to send to ${destination}:`, err.message);
@@ -2325,8 +2376,8 @@ export async function postCall(bot, { chain, tokenAddress, riskResult, name, sym
   return broadcast(bot, message);
 }
 
-export async function postUpdate(bot, text) {
-  return broadcast(bot, truncateForTelegram(text));
+export async function postUpdate(bot, text, extra = {}) {
+  return broadcast(bot, truncateForTelegram(text), extra);
 }
 
 // Same as postUpdate, but for NFT-side messages specifically (trade opens/

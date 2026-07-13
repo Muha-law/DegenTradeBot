@@ -430,6 +430,16 @@ export function deactivateCallByToken(tokenAddress) {
   return res.changes;
 }
 
+// Bulk "Remove ALL" for the Watchlist button — pinned calls are deliberately
+// excluded, since pinning something already signals "keep this past normal
+// expiry," matching the existing docs on toggleCallPinned below ("stays on
+// the Watchlist until you unpin OR remove it" — a bulk sweep shouldn't be
+// the thing that removes it). Returns how many were cleared.
+export function deactivateAllCalls() {
+  const res = db.prepare("UPDATE called_tokens SET active = 0 WHERE active = 1 AND pinned = 0").run();
+  return res.changes;
+}
+
 // Toggles retain-on-watchlist. Only meaningful on an active call — pinning
 // something already expired doesn't resurrect it (the row stays active=0).
 export function toggleCallPinned(tokenAddress) {
