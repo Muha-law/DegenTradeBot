@@ -36,10 +36,13 @@ export function startRecheckQueue(bot) {
         }
 
         const ageMinutes = (Date.now() - p.first_seen_at) / 60000;
-        if (ageMinutes > maxTokenAgeMinutes) {
-          removePending(p.id);
-          continue;
-        }
+        // Still give an about-to-expire token one last evaluateToken pass
+        // (cheap — applyFilter's age check fails it and returns before any
+        // AI/sellability calls) instead of dropping it silently, so the drop
+        // log below can show WHY it never passed rather than just that it
+        // aged out — e.g. distinguishing "still below minimums" from "shot
+        // past the market cap/volume ceiling before ever qualifying."
+        const isLastChance = ageMinutes > maxTokenAgeMinutes;
 
         try {
           const result = await evaluateToken(bot, {
@@ -55,12 +58,20 @@ export function startRecheckQueue(bot) {
             console.log(`[recheck] ${p.chain} ${result.symbol} (${p.token_address}) now passes — called`);
           } else if (result.reasons.includes("Already called")) {
             removePending(p.id);
+          } else if (isLastChance) {
+            removePending(p.id);
+            console.log(`[recheck] ${p.chain} ${p.token_address} dropped — aged out at ${ageMinutes.toFixed(0)}m without passing. Last reasons: ${result.reasons.join("; ")}`);
           } else {
             touchPending(p.id);
           }
         } catch (err) {
           console.error(`[recheck] failed ${p.chain} ${p.token_address}:`, err.message);
-          touchPending(p.id);
+          if (isLastChance) {
+            removePending(p.id);
+            console.log(`[recheck] ${p.chain} ${p.token_address} dropped — aged out at ${ageMinutes.toFixed(0)}m after an evaluation error: ${err.message}`);
+          } else {
+            touchPending(p.id);
+          }
         }
       }
     } finally {
