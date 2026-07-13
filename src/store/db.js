@@ -41,6 +41,18 @@ db.exec(`
     last_seen_at INTEGER
   );
 
+  -- Decoupled from pending_tokens' own lifecycle on purpose: a token can be
+  -- caught as a honeypot on its very first (live-watcher) evaluation, before
+  -- any pending_tokens row exists yet (that only gets INSERTed afterward, in
+  -- index.js). Keying dedup off pending_tokens directly would race against
+  -- that ordering and risk a duplicate notification on the next recheck.
+  CREATE TABLE IF NOT EXISTS honeypot_notifications (
+    chain TEXT NOT NULL,
+    token_address TEXT NOT NULL,
+    notified_at INTEGER NOT NULL,
+    PRIMARY KEY (chain, token_address)
+  );
+
   CREATE TABLE IF NOT EXISTS pending_tokens (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     chain TEXT NOT NULL,
@@ -447,6 +459,22 @@ export function recordDeployerOutcome(deployerAddress, { lowScore }) {
 
 export function getDeployerHistory(deployerAddress) {
   return db.prepare("SELECT * FROM deployer_history WHERE deployer_address = ?").get(deployerAddress);
+}
+
+// Dedup for the "caught and skipped a honeypot" notification — the recheck
+// queue re-runs the sellability probe every 2m for up to maxTokenAgeMinutes,
+// so without this a single honeypot would otherwise spam one message per
+// cycle for up to an hour.
+export function hasHoneypotNotification(chain, tokenAddress) {
+  return !!db.prepare("SELECT 1 FROM honeypot_notifications WHERE chain = ? AND token_address = ?").get(chain, tokenAddress);
+}
+
+export function markHoneypotNotified(chain, tokenAddress) {
+  db.prepare("INSERT OR IGNORE INTO honeypot_notifications (chain, token_address, notified_at) VALUES (?, ?, ?)").run(
+    chain,
+    tokenAddress,
+    Date.now()
+  );
 }
 
 export function addPending({ chain, tokenAddress, pairAddress, dexName, firstSeenAt }) {

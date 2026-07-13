@@ -343,6 +343,19 @@ export function buildRealTradeFailedMessage({ chain, tokenAddress, name, symbol,
   ].join("\n");
 }
 
+// Informational only — no trade was ever attempted, the token was rejected
+// before a call could go out. Sent once per token (see
+// hasHoneypotNotification/markHoneypotNotified in store/db.js) even though
+// the recheck queue re-runs the underlying probe repeatedly as the token ages.
+export function buildHoneypotCaughtMessage({ chain, tokenAddress, name, symbol, blocked, tested }) {
+  return [
+    `🛑 *Honeypot caught and skipped* — ${escapeMd(name) || "Unknown"} (${escapeMd(symbol) || "?"}) on ${chain.label}`,
+    `${blocked}/${tested} real holders tested were blocked from selling — never called, no trade attempted.`,
+    "",
+    `\`${tokenAddress}\``,
+  ].join("\n");
+}
+
 export function buildPaperTradingSummary({ settings, stats, unrealizedPnlUsd }) {
   const lines = [
     "📈 *Paper Trading*",

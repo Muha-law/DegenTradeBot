@@ -1,13 +1,21 @@
 import { computeRiskScore } from "./risk/riskScore.js";
 import { applyFilter } from "./filters/filter.js";
-import { recordCall, recordDeployerOutcome, hasBeenCalled, findRecentCallsByName } from "./store/db.js";
-import { postCall } from "./telegram/bot.js";
+import {
+  recordCall,
+  recordDeployerOutcome,
+  hasBeenCalled,
+  findRecentCallsByName,
+  hasHoneypotNotification,
+  markHoneypotNotified,
+} from "./store/db.js";
+import { postCall, postUpdate } from "./telegram/bot.js";
 import { openPaperTradeIfRoom } from "./paperTrading.js";
 import { openRealTradeIfRoom } from "./realTrading.js";
 import { screenForRugPatterns } from "./ai/rugDetector.js";
 import { analyzeRugRisk } from "./ai/rugAnalyst.js";
 import { probeSellability } from "./risk/sellability.js";
 import { getBestPair, pairSummary } from "./risk/dexscreener.js";
+import { buildHoneypotCaughtMessage } from "./telegram/formatMessage.js";
 
 // For each prior same-name call, fetches its current price (best-effort) so
 // the AI screen can see whether the earlier namesake already pumped —
@@ -65,6 +73,13 @@ export async function evaluateToken(bot, { chain, dexName, pairAddress, tokenAdd
   if (filters.requireSellabilityCheck !== false) {
     const sellCheck = await probeSellability(chain, tokenAddress, pairAddress);
     if (sellCheck.honeypot === true) {
+      if (!hasHoneypotNotification(chain.key, tokenAddress)) {
+        markHoneypotNotified(chain.key, tokenAddress);
+        await postUpdate(
+          bot,
+          buildHoneypotCaughtMessage({ chain, tokenAddress, name, symbol, blocked: sellCheck.blocked, tested: sellCheck.tested })
+        );
+      }
       return {
         pass: false,
         reasons: [`Selective honeypot — ${sellCheck.blocked}/${sellCheck.tested} real holders blocked from selling`],
