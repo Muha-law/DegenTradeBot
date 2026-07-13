@@ -631,10 +631,24 @@ function manualTradeKeyboard(hasOpenPosition) {
 }
 
 function realActiveTradesKeyboard(trades = []) {
-  const rows = trades.map((t, i) => [Markup.button.callback(`🛑 Sell #${i + 1} ${t.symbol || "?"}`, `realclosetrade:${t.id}`)]);
+  const rows = trades.map((t, i) => [
+    Markup.button.callback(`🛑 Sell #${i + 1} ${t.symbol || "?"}`, `realclosetrade:${t.id}`),
+    // For a position that's confirmed genuinely unsellable (e.g. a
+    // maxTxAmount-style honeypot that only blocks transfers to the pair) —
+    // marks it closed as a full loss without attempting an on-chain sell,
+    // so it stops being retried forever and stops eating budget headroom.
+    Markup.button.callback(`☠️ Write off #${i + 1}`, `realwriteoffconfirm:${t.id}`),
+  ]);
   rows.push([Markup.button.callback("🔄 Refresh", "menu:realactive")]);
   rows.push([Markup.button.callback("🔙 Real Funds Trading", "menu:realtrading")]);
   return Markup.inlineKeyboard(rows);
+}
+
+function realWriteOffConfirmKeyboard(id) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("☠️ Yes, write off as a total loss", `realwriteoff:${id}`)],
+    [Markup.button.callback("❌ Cancel", "menu:realactive")],
+  ]);
 }
 
 function realEnableConfirmKeyboard(chainKey) {
@@ -1917,6 +1931,68 @@ export function createBot(stats, chainControls, digestControls) {
       });
     } catch (err) {
       return safeEdit(ctx, `⚠️ Failed to sell #${id}: ${err.message}`, realActiveTradesKeyboard(getOpenRealTrades()));
+    } finally {
+      releaseTradeLock(lockKey);
+    }
+    const { trades, totalUnrealizedUsd } = await getOpenRealTradesWithLivePnl();
+    trades.sort((a, b) => (b.pnlPct ?? -Infinity) - (a.pnlPct ?? -Infinity));
+    const walletBalances = await getWalletBalancesForTrades(trades);
+    await safeEdit(ctx, buildActiveTradesMessage({ trades, totalUnrealizedUsd, walletBalances, mode: "real" }), realActiveTradesKeyboard(trades));
+  });
+
+  // Write off a position that's confirmed genuinely unsellable (e.g. a
+  // token whose contract blocks transfers to its own liquidity pair —
+  // confirmed live on NACH/ENDM: a plain transfer succeeds, but any sell
+  // attempt reverts with "Transfer amount exceeds the maxTxAmount" at ANY
+  // size, so it can never clear the normal sell path). Records the full
+  // loss with no sell attempt, unlike realclosetrade — use with care, this
+  // should only be tapped after independently confirming the position truly
+  // can't be sold, not as a shortcut around a slow/failing sell.
+  bot.action(/^realwriteoffconfirm:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const id = Number(ctx.match[1]);
+    const t = getRealTradeById(id);
+    if (!t || t.status !== "open") {
+      return safeEdit(ctx, "Already closed or not found.", realActiveTradesKeyboard(getOpenRealTrades()));
+    }
+    await safeEdit(
+      ctx,
+      `☠️ *Write off ${escapeMd(t.symbol) || t.token_address}?*\n\nThis marks the position closed as a full loss ($${t.position_size_usd.toFixed(2)}) WITHOUT attempting an on-chain sell. Only do this once you've confirmed the position genuinely can't be sold. This can't be undone.`,
+      realWriteOffConfirmKeyboard(id)
+    );
+  });
+
+  bot.action(/^realwriteoff:(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const id = Number(ctx.match[1]);
+    const t = getRealTradeById(id);
+    if (!t || t.status !== "open") {
+      await ctx.answerCbQuery("Already closed or not found.");
+      return safeEdit(ctx, "Already closed or not found.", realActiveTradesKeyboard(getOpenRealTrades()));
+    }
+    const lockKey = `${t.chain}:${t.token_address}`;
+    if (!acquireTradeLock(lockKey)) {
+      await ctx.answerCbQuery("A trade for this token is already in progress — please wait.");
+      return;
+    }
+    await ctx.answerCbQuery("Writing off…");
+    try {
+      const pnlUsd = -(t.position_size_usd + (t.entry_gas_usd || 0));
+      closeRealTrade(id, {
+        exitPriceUsd: 0,
+        exitReason: "manual_writeoff",
+        pnlUsd,
+        pnlPct: -100,
+        nativeReceived: 0,
+        exitTxHash: null,
+        exitGasUsd: 0,
+      });
     } finally {
       releaseTradeLock(lockKey);
     }

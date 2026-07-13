@@ -169,6 +169,7 @@ export async function evaluateToken(bot, { chain, dexName, pairAddress, tokenAdd
   await openRealTradeIfRoom(bot, {
     chain,
     tokenAddress,
+    pairAddress,
     symbol,
     name,
     priceUsd: riskResult.pair?.priceUsd,

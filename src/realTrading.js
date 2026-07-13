@@ -64,7 +64,7 @@ function qualifiesForComando(trade, settings) {
 // explicitly enabled for THIS chain and a wallet is configured. No-ops
 // otherwise — this never runs alongside paper trading being the only thing
 // enabled.
-export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, name, priceUsd, marketCapUsd }) {
+export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddress, symbol, name, priceUsd, marketCapUsd }) {
   const settings = loadRealTradingSettings();
   if (!isChainTradingEnabled(settings, chain.key)) return;
   if (!hasWallet()) return;
@@ -128,7 +128,7 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, symbol, na
   // swapExecutor.js's verifySellable for why this matters on a chain GoPlus
   // doesn't cover. Catches the blacklist/pause/trading-disabled pattern in
   // seconds instead of leaving a bad position to be discovered hours later.
-  const sellCheck = await verifySellable(chain, tokenAddress, result.tokenAmountRaw);
+  const sellCheck = await verifySellable(chain, tokenAddress, result.tokenAmountRaw, pairAddress);
   if (!sellCheck.sellable) {
     console.error(`[realTrading] ⚠️ SELLABILITY CHECK FAILED for ${symbol} (${chain.key}): ${sellCheck.reason} — likely honeypot, attempting immediate exit`);
     await postUpdate(

@@ -60,20 +60,31 @@ const DEADLINE_SECONDS = 120;
 // passed, meaning it wasn't going to fail at the moment it was checked.
 // Retrying the identical transaction would just fail the same way again;
 // retrying with more slippage tolerance gives it room to succeed against a
-// price that's since moved further. Ladder stays within 5–10% regardless of
-// what's configured above 1000bps, and never exceeds the caller's own
-// configured ceiling if that's lower.
-const SLIPPAGE_RETRY_LADDER_BPS = [500, 750, 1000];
+// price that's since moved further.
+//
+// The FIRST attempt always uses the caller's own configured slippageBps
+// (that value is still fully respected as the intended baseline tolerance).
+// Only the RETRY attempts are allowed to climb past it, up to this absolute
+// ceiling — capping retries at the same configured value defeats the point
+// of retrying at all, which is exactly what happened silently by default:
+// the old ladder was [500, 750, 1000] but got hard-capped at the caller's
+// ceiling, and since 500bps is also the default slippageBps, every retry
+// ladder in production collapsed to a single attempt with zero room to
+// escalate (confirmed live: every FLETCH-style buy failure logged
+// "attempt 1/1" no matter how many rungs were defined above).
+const ABSOLUTE_MAX_RETRY_SLIPPAGE_BPS = 1000;
+const RETRY_ESCALATION_STEPS_BPS = [750, 1000];
 
-// Runs `attempt(slippageBps)` against an escalating slippage ladder (capped
-// at maxBps) until one succeeds, retrying only on an actual failure — not a
-// blanket retry-anything wrapper, so callers should still let genuinely
+// Runs `attempt(slippageBps)` against an escalating slippage ladder until
+// one succeeds, retrying only on an actual failure — not a blanket
+// retry-anything wrapper, so callers should still let genuinely
 // non-retryable errors (e.g. no wallet configured) surface normally, since
 // those will just fail identically on every rung and only waste time.
-export async function withSlippageRetry(attempt, maxBps) {
-  const ladder = SLIPPAGE_RETRY_LADDER_BPS.filter((bps) => bps <= maxBps);
-  if (ladder.length === 0) ladder.push(maxBps);
-  else if (ladder[ladder.length - 1] < maxBps) ladder.push(maxBps);
+export async function withSlippageRetry(attempt, configuredBps) {
+  const ladder = [configuredBps];
+  for (const bps of RETRY_ESCALATION_STEPS_BPS) {
+    if (bps > ladder[ladder.length - 1] && bps <= ABSOLUTE_MAX_RETRY_SLIPPAGE_BPS) ladder.push(bps);
+  }
 
   let lastErr;
   for (let i = 0; i < ladder.length; i++) {
@@ -100,20 +111,26 @@ function requireWallet(chain) {
 // token at all. This is the most reliable signal available on a chain
 // GoPlus doesn't cover (see riskScore.js's goplusUnsupported flag) — it
 // uses real, already-owned on-chain state instead of guessing at storage
-// slots to simulate a purchase that hasn't happened yet. It doesn't prove
-// the AMM specifically will accept a sell (a token could allow plain
-// transfers but still block the router), but it catches the dominant
-// blacklist/pause/trading-disabled pattern that caused tonight's
-// TransferHelper: TRANSFER_FROM_FAILED losses, within seconds instead of
-// the hours it took to discover manually.
-export async function verifySellable(chain, tokenAddress, tokenAmountRaw) {
+// slots to simulate a purchase that hasn't happened yet.
+//
+// Tests a transfer to the PAIR specifically (falling back to a generic burn
+// address only when no pair address is known) — NOT a generic destination.
+// Confirmed live on two stuck real positions (NACH, ENDM) that this
+// distinction matters: both allow ordinary wallet-to-wallet transfers just
+// fine (a transfer to DEAD_ADDRESS would have reported "sellable"), but
+// their contracts enforce a maxTxAmount cap specifically on transfers TO
+// the liquidity pair — i.e. selling — which only a pair-targeted test can
+// catch. probeSellability() (the pre-call gate) already tests against the
+// real pair for this reason; this fallback now matches it.
+export async function verifySellable(chain, tokenAddress, tokenAmountRaw, pairAddress) {
   const wallet = requireWallet(chain);
   const token = new Contract(tokenAddress, ERC20_ABI, wallet);
   const amountIn = BigInt(tokenAmountRaw);
   if (amountIn <= 0n) return { sellable: false, reason: "No token balance to test" };
   const testAmount = amountIn > 100n ? amountIn / 100n : amountIn;
+  const destination = pairAddress || DEAD_ADDRESS;
   try {
-    await token.transfer.staticCall(DEAD_ADDRESS, testAmount);
+    await token.transfer.staticCall(destination, testAmount);
     return { sellable: true };
   } catch (err) {
     return { sellable: false, reason: err.shortMessage || err.message };
