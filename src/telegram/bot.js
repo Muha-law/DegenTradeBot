@@ -56,6 +56,8 @@ import {
   isChainTradingEnabled as isRealChainEnabled,
   isAnyChainTradingEnabled as isAnyRealChainEnabled,
   setChainTradingEnabled as setRealChainEnabled,
+  getPositionSizeUsd,
+  setPositionSizeUsd,
 } from "../realTradingSettings.js";
 import { hasWallet, getWalletAddress, getNativeBalance, resolveEnsName, getPrivateKeyForExport } from "../wallet.js";
 import { saveWalletPrivateKey } from "../walletSettings.js";
@@ -590,7 +592,7 @@ function realTradingKeyboard(settings, walletReady) {
   const rows = [
     ...chainRows,
     [Markup.button.callback(`Budget: $${settings.totalBudgetUsd}`, "realedit:totalBudgetUsd")],
-    [Markup.button.callback(`Position size: $${settings.positionSizeUsd}`, "realedit:positionSizeUsd")],
+    [Markup.button.callback(`💵 Position sizes (default $${settings.positionSizeUsd})`, "menu:realpositionsizes")],
     [Markup.button.callback(`Take profit: +${settings.takeProfitPct}%`, "realedit:takeProfitPct")],
     [Markup.button.callback(`Stop loss: ${settings.stopLossPct}%`, "realedit:stopLossPct")],
     [Markup.button.callback(`Slippage: ${(settings.slippageBps / 100).toFixed(1)}%`, "realedit:slippageBps")],
@@ -609,6 +611,23 @@ function realTradingKeyboard(settings, walletReady) {
   if (!walletReady) {
     rows.unshift([Markup.button.callback("⚠️ No wallet configured — see .env", "menu:realtrading")]);
   }
+  return Markup.inlineKeyboard(rows);
+}
+
+// Per-chain position sizing — a chain running low on its native currency
+// (confirmed live: BSC ran short of BNB for a $10 buy) shouldn't force every
+// OTHER chain's position size down too, which was the only lever available
+// while positionSizeUsd was one global number.
+function realPositionSizesKeyboard(settings) {
+  const chains = getActiveChainDefs();
+  const rows = chains.map((c) => {
+    const hasOverride = typeof settings.positionSizeUsdByChain?.[c.key] === "number";
+    const effective = getPositionSizeUsd(settings, c.key);
+    const label = `${c.label}: $${effective}${hasOverride ? " (custom)" : " (default)"}`;
+    return [Markup.button.callback(label, `realpositionsizeedit:${c.key}`)];
+  });
+  rows.push([Markup.button.callback(`Default (fallback for other chains): $${settings.positionSizeUsd}`, "realedit:positionSizeUsd")]);
+  rows.push([Markup.button.callback("🔙 Real Funds Trading", "menu:realtrading")]);
   return Markup.inlineKeyboard(rows);
 }
 
@@ -1313,6 +1332,24 @@ async function handlePendingAction(ctx, pending, text, digestControls) {
       note = "\n⚠️ Trades execute a hard-coded $50/trade safety ceiling regardless of this setting — this value won't actually be used above that.";
     }
     return ctx.reply(`Updated *${pending.key}*: ${prev} → ${value}${note}`, { parse_mode: "Markdown", ...backKeyboard() });
+  }
+
+  if (pending.type === "realChainPositionSize") {
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const value = Number(text.trim());
+    if (!Number.isFinite(value) || value <= 0) {
+      return ctx.reply("That doesn't look like a valid amount — tap the chain again to retry.");
+    }
+    const settings = loadRealTradingSettings();
+    const prev = getPositionSizeUsd(settings, pending.chainKey);
+    setPositionSizeUsd(settings, pending.chainKey, value);
+    saveRealTradingSettings(settings);
+    const note =
+      value > 50 ? "\n⚠️ Trades execute a hard-coded $50/trade safety ceiling regardless of this setting — this value won't actually be used above that." : "";
+    return ctx.reply(`Updated *${CHAINS[pending.chainKey]?.label || pending.chainKey}* position size: $${prev} → $${value}${note}`, {
+      parse_mode: "Markdown",
+      ...backKeyboard(),
+    });
   }
 
   if (pending.type === "nftFilter") {
@@ -2024,6 +2061,30 @@ export function createBot(stats, chainControls, digestControls) {
     await renderRealTradingView(ctx);
   });
 
+  bot.action("menu:realpositionsizes", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    await ctx.answerCbQuery();
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const settings = loadRealTradingSettings();
+    await safeEdit(
+      ctx,
+      "💵 *Position Sizes*\n\nEach chain trades at its own size — a chain running low on its native currency no longer forces every other chain's size down too. Tap a chain to set its own amount, or edit the default that other chains fall back to.",
+      realPositionSizesKeyboard(settings)
+    );
+  });
+
+  bot.action(/^realpositionsizeedit:(.+)$/, async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    await ctx.answerCbQuery();
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const chainKey = ctx.match[1];
+    if (!CHAINS[chainKey]) return ctx.reply("Unknown chain.");
+    const settings = loadRealTradingSettings();
+    const current = getPositionSizeUsd(settings, chainKey);
+    setPending(ctx.chat.id, { type: "realChainPositionSize", chainKey });
+    await ctx.reply(`Send the new position size in USD for ${CHAINS[chainKey].label} (current: $${current}):`);
+  });
+
   bot.action("menu:realmanual", async (ctx) => {
     await ctx.answerCbQuery();
     if (!isAdmin(ctx)) return ctx.reply("Not authorized.");
@@ -2108,7 +2169,7 @@ export function createBot(stats, chainControls, digestControls) {
     const settings = loadRealTradingSettings();
     await safeEdit(
       ctx,
-      `⚠️ *This trades with real money on ${chainLabel}.*\n\nPosition size: $${settings.positionSizeUsd} | Budget: $${settings.totalBudgetUsd}\n\nEvery call on ${chainLabel} that passes your filters will attempt a real on-chain buy. Continue?`,
+      `⚠️ *This trades with real money on ${chainLabel}.*\n\nPosition size: $${getPositionSizeUsd(settings, chainKey)} | Budget: $${settings.totalBudgetUsd}\n\nEvery call on ${chainLabel} that passes your filters will attempt a real on-chain buy. Continue?`,
       realEnableConfirmKeyboard(chainKey)
     );
   });

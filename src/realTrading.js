@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import { CHAINS } from "./chains.js";
 import { isPaused } from "./botState.js";
-import { loadRealTradingSettings, isChainTradingEnabled } from "./realTradingSettings.js";
+import { loadRealTradingSettings, isChainTradingEnabled, getPositionSizeUsd } from "./realTradingSettings.js";
 import { getBestPair, pairSummary } from "./risk/dexscreener.js";
 import { checkFreshLiquidity } from "./filters/filter.js";
 import { shouldExitMooner } from "./ai/superComando.js";
@@ -79,7 +79,8 @@ export function checkRealTradeEligibility(chain) {
     return { eligible: false, reason: "no wallet configured" };
   }
   const stats = getRealTradingStats();
-  if (stats.deployedUsd + settings.positionSizeUsd > settings.totalBudgetUsd) {
+  const positionSizeUsd = getPositionSizeUsd(settings, chain.key);
+  if (stats.deployedUsd + positionSizeUsd > settings.totalBudgetUsd) {
     return { eligible: false, reason: `budget full ($${stats.deployedUsd.toFixed(0)}/$${settings.totalBudgetUsd} deployed)` };
   }
   return { eligible: true };
@@ -101,7 +102,8 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
   }
 
   const stats = getRealTradingStats();
-  if (stats.deployedUsd + settings.positionSizeUsd > settings.totalBudgetUsd) {
+  const positionSizeUsd = getPositionSizeUsd(settings, chain.key);
+  if (stats.deployedUsd + positionSizeUsd > settings.totalBudgetUsd) {
     console.log(`[realTrading] budget exhausted (${stats.deployedUsd}/${settings.totalBudgetUsd}) — skipping ${symbol}`);
     return;
   }
@@ -118,7 +120,7 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
 
   let result;
   try {
-    result = await withSlippageRetry((bps) => buyToken(chain, tokenAddress, settings.positionSizeUsd, bps), settings.slippageBps);
+    result = await withSlippageRetry((bps) => buyToken(chain, tokenAddress, positionSizeUsd, bps), settings.slippageBps);
   } catch (err) {
     console.error(`[realTrading] BUY FAILED for ${symbol} (${chain.key}) after slippage retries:`, err.message);
     await postAdminUpdate(bot, buildRealTradeFailedMessage({ chain, tokenAddress, name, symbol, reason: err.message }));
@@ -132,7 +134,7 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
     symbol: symbol || null,
     name: name || null,
     entryPriceUsd: result.entryPriceUsd,
-    positionSizeUsd: settings.positionSizeUsd,
+    positionSizeUsd,
     takeProfitPct: settings.takeProfitPct,
     stopLossPct: settings.stopLossPct,
     entryAt,
@@ -183,8 +185,8 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
       // because of price movement. More slippage tolerance can't fix that;
       // retrying would just burn time re-failing the same way.
       const sellResult = await sellToken(chain, tokenAddress, result.tokenAmountRaw, settings.slippageBps);
-      const pnlUsd = sellResult.proceedsUsd - settings.positionSizeUsd - result.gasUsd - sellResult.gasUsd;
-      const pnlPct = (pnlUsd / settings.positionSizeUsd) * 100;
+      const pnlUsd = sellResult.proceedsUsd - positionSizeUsd - result.gasUsd - sellResult.gasUsd;
+      const pnlPct = (pnlUsd / positionSizeUsd) * 100;
       closeRealTrade(res.lastInsertRowid, {
         exitPriceUsd: 0,
         exitReason: "honeypot_immediate_exit",
@@ -241,7 +243,7 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
       name,
       symbol,
       entryPriceUsd: result.entryPriceUsd,
-      positionSizeUsd: settings.positionSizeUsd,
+      positionSizeUsd,
       takeProfitPct: settings.takeProfitPct,
       stopLossPct: settings.stopLossPct,
       txHash: result.txHash,
@@ -254,7 +256,7 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
       tradeMode: "real",
       entryPriceUsd: result.entryPriceUsd,
       entryMarketCapUsd: marketCapUsd,
-      positionSizeUsd: settings.positionSizeUsd,
+      positionSizeUsd,
       takeProfitPct: settings.takeProfitPct,
       stopLossPct: settings.stopLossPct,
       tokenAddress,

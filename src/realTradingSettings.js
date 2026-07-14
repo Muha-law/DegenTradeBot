@@ -11,7 +11,18 @@ const DEFAULTS = {
   // default. See enabledChains helpers below.
   enabledChains: [],
   totalBudgetUsd: 20,
+  // Fallback used by any chain without its own override in
+  // positionSizeUsdByChain below — kept separate rather than folded in, so
+  // existing installs that only ever set this one global value keep
+  // working unchanged.
   positionSizeUsd: 2,
+  // Per-chain overrides — e.g. a chain whose native currency is running low
+  // shouldn't force every OTHER chain's position size down too. Confirmed
+  // real motivation: BSC's wallet ran short of BNB for a $10 position while
+  // other chains were unaffected, and positionSizeUsd being global meant
+  // the only fix was shrinking every chain's sizing at once.
+  // { [chainKey]: usd } — absent entries fall back to positionSizeUsd above.
+  positionSizeUsdByChain: {},
   takeProfitPct: 100,
   stopLossPct: -50,
   // Max acceptable price movement between quoting a swap and it confirming
@@ -63,5 +74,15 @@ export function setChainTradingEnabled(settings, chainKey, enabled) {
   if (enabled) set.add(chainKey);
   else set.delete(chainKey);
   settings.enabledChains = [...set];
+  return settings;
+}
+
+export function getPositionSizeUsd(settings, chainKey) {
+  const override = settings.positionSizeUsdByChain?.[chainKey];
+  return typeof override === "number" ? override : settings.positionSizeUsd;
+}
+
+export function setPositionSizeUsd(settings, chainKey, usd) {
+  settings.positionSizeUsdByChain = { ...(settings.positionSizeUsdByChain || {}), [chainKey]: usd };
   return settings;
 }

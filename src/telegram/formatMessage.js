@@ -399,7 +399,7 @@ export function buildRealTradingSummary({ settings, stats, unrealizedPnlUsd, wal
   }
   lines.push(
     "",
-    `Budget: ${fmtUsd(settings.totalBudgetUsd)} total | ${fmtUsd(settings.positionSizeUsd)}/trade`,
+    `Budget: ${fmtUsd(settings.totalBudgetUsd)} total | ${fmtUsd(settings.positionSizeUsd)}/trade default (per-chain sizes in 💵 Position sizes)`,
     `Target: +${settings.takeProfitPct}% | Stop: ${settings.stopLossPct}%`,
     `Slippage tolerance: ${(settings.slippageBps / 100).toFixed(1)}%`,
     `🪖 Super Comando: ${settings.superComandoEnabled ? "🟢 ON" : "⚪️ off"}`,
