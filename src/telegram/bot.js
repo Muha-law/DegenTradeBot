@@ -2938,15 +2938,22 @@ export async function postAdminTradeCard(bot, { caption, imageBuffer }) {
 // later. Distinct from postUpdate: this must reach channel followers who
 // may have acted on the original call, not just the admin's primary chat.
 export async function postCallAbort(bot, { chain, tokenAddress, name, symbol, reason }) {
-  if (config.telegram.callsChannels.length === 0) return;
+  // Targets both lists — the calls-only channel (if configured) and signal
+  // channels (the "mirror everything" group set up via TELEGRAM_SIGNAL_CHANNELS,
+  // which is where this actually needs to land today). Never the primary
+  // chat: the admin already gets the full technical failure via
+  // postAdminUpdate, this is the public-friendly version for followers who
+  // may have acted on the original call.
+  const destinations = [...config.telegram.signalChannels, ...config.telegram.callsChannels];
+  if (destinations.length === 0) return;
   const message = truncateForTelegram(
-    `🚨 *ABORT* — ${escapeMd(name) || "Unknown"} (${escapeMd(symbol) || "?"}) on ${chain.label}\n\n${reason}\n\n\`${tokenAddress}\``
+    `🚫 *ABORT — do not buy*\n${escapeMd(name) || "Unknown"} (${escapeMd(symbol) || "?"}) on ${chain.label}\n\n${reason}\n\n\`${tokenAddress}\``
   );
-  for (const destination of config.telegram.callsChannels) {
+  for (const destination of destinations) {
     try {
       await bot.telegram.sendMessage(destination, message, { parse_mode: "Markdown" });
     } catch (err) {
-      console.error(`Failed to send abort notice to calls channel ${destination}:`, err.message);
+      console.error(`Failed to send abort notice to ${destination}:`, err.message);
     }
   }
 }

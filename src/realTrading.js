@@ -5,7 +5,7 @@ import { loadRealTradingSettings, isChainTradingEnabled, getPositionSizeUsd } fr
 import { getBestPair, pairSummary } from "./risk/dexscreener.js";
 import { checkFreshLiquidity, checkFreshHoneypotStatus } from "./filters/filter.js";
 import { shouldExitMooner } from "./ai/superComando.js";
-import { buyToken, sellToken, verifySellable, withSlippageRetry, getTokenBalance } from "./execution/swapExecutor.js";
+import { buyToken, sellToken, verifySellable, withSlippageRetry, getTokenBalance, UndeliveredTokensError } from "./execution/swapExecutor.js";
 import { hasWallet, getWalletAddress } from "./wallet.js";
 import {
   openRealTrade,
@@ -136,6 +136,21 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
   } catch (err) {
     console.error(`[realTrading] BUY FAILED for ${symbol} (${chain.key}) after slippage retries:`, err.message);
     await postAdminUpdate(bot, buildRealTradeFailedMessage({ chain, tokenAddress, name, symbol, reason: err.message }));
+    // Only for the honeypot-shaped failure specifically — not every buy
+    // failure (insufficient funds, a slippage revert, etc.) says anything
+    // about whether the TOKEN itself is bad, just about our own wallet/
+    // timing. Worded differently from the admin's own message above: that
+    // one shows the raw technical error for debugging, this is the
+    // plain-language version for anyone who saw the original call.
+    if (err instanceof UndeliveredTokensError) {
+      await postCallAbort(bot, {
+        chain,
+        tokenAddress,
+        name,
+        symbol,
+        reason: "Likely a honeypot — the purchase confirms on-chain, but no tokens ever reach the buyer's wallet. Don't buy this one.",
+      });
+    }
     return;
   }
 
