@@ -1449,6 +1449,17 @@ export function createBot(stats, chainControls, digestControls) {
   // Keep Telegram's "/" autocomplete minimal — buttons are the primary nav now.
   bot.telegram.setMyCommands([{ command: "start", description: "Open the menu" }]).catch(() => {});
 
+  // A calls-only broadcast destination (TELEGRAM_CALLS_CHANNELS) must stay a
+  // pure announcement group — members see the calls postCall() mirrors
+  // there, but get zero interactive access to the bot, regardless of who
+  // they are (this isn't isAdmin-gated per action; it drops the update
+  // before any handler, including /start, ever sees it). The admin manages
+  // the bot from the primary chat, not from here.
+  bot.use((ctx, next) => {
+    if (ctx.chat && config.telegram.callsChannels.includes(String(ctx.chat.id))) return;
+    return next();
+  });
+
   // Records every distinct user who's interacted with the bot at all — not
   // just /start — so the Bot Stats count reflects actual usage.
   bot.use((ctx, next) => {
@@ -1540,6 +1551,7 @@ export function createBot(stats, chainControls, digestControls) {
   }
 
   bot.action("menu:walletbalance", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
     await ctx.answerCbQuery();
     await renderWalletBalance(ctx);
   });
@@ -1862,6 +1874,7 @@ export function createBot(stats, chainControls, digestControls) {
   }
 
   bot.action("menu:realtrading", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
     await ctx.answerCbQuery();
     if (!(await requireRealTradingUnlock(ctx))) return;
     await renderRealTradingView(ctx);
@@ -1878,6 +1891,7 @@ export function createBot(stats, chainControls, digestControls) {
   });
 
   bot.action("realmanualrefresh", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
     await ctx.answerCbQuery();
     if (!(await requireRealTradingUnlock(ctx))) return;
     await renderManualTradeTerminal(ctx);
@@ -1989,6 +2003,7 @@ export function createBot(stats, chainControls, digestControls) {
   });
 
   bot.action("menu:realactive", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
     await ctx.answerCbQuery();
     if (!(await requireRealTradingUnlock(ctx))) return;
     await renderActiveTradesView(ctx);
@@ -2035,6 +2050,7 @@ export function createBot(stats, chainControls, digestControls) {
   // below (realsellidpct / realsellidcustom / realsellidinitial), leaving
   // every other open position untouched either way.
   bot.action(/^realsellmenu:(\d+)$/, async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
     await ctx.answerCbQuery();
     if (!(await requireRealTradingUnlock(ctx))) return;
     const id = Number(ctx.match[1]);
@@ -2164,6 +2180,7 @@ export function createBot(stats, chainControls, digestControls) {
   });
 
   bot.action("menu:realclosed", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
     await ctx.answerCbQuery();
     if (!(await requireRealTradingUnlock(ctx))) return;
     const closed = getClosedRealTrades(15);
@@ -2349,6 +2366,7 @@ export function createBot(stats, chainControls, digestControls) {
   });
 
   bot.action("menu:nftrealactive", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
     await ctx.answerCbQuery();
     if (!requireOpensea(ctx)) return;
     if (!(await requireRealTradingUnlock(ctx))) return;
@@ -2357,6 +2375,7 @@ export function createBot(stats, chainControls, digestControls) {
   });
 
   bot.action("menu:nftrealtrading", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
     await ctx.answerCbQuery();
     if (!requireOpensea(ctx)) return;
     if (!(await requireRealTradingUnlock(ctx))) return;
