@@ -31,6 +31,11 @@ export const config = {
     botToken: required("TELEGRAM_BOT_TOKEN"),
     chatId: primaryChatId,
     destinations: [primaryChatId, ...extraDestinations],
+    // Signal channels alone, without the primary chat — needed wherever a
+    // message must reach shared destinations but explicitly NOT duplicate to
+    // the primary chat (e.g. postCall's admin-only eligibility note, which
+    // sends to chatId separately with extra detail signal channels don't get).
+    signalChannels: extraDestinations,
     callsChannels,
     adminUserId: process.env.ADMIN_USER_ID ? String(process.env.ADMIN_USER_ID) : null,
   },

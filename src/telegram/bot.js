@@ -2805,27 +2805,31 @@ async function broadcast(bot, message, extra = {}) {
 }
 
 export async function postCall(bot, { chain, tokenAddress, riskResult, name, symbol, realEligibility }) {
-  const baseMessage = buildCallMessage({ chain, tokenAddress, riskResult, name, symbol });
+  const baseMessage = truncateForTelegram(buildCallMessage({ chain, tokenAddress, riskResult, name, symbol }));
   // The "real trading skipped" note is operational detail about the admin's
-  // own wallet/budget/chain-pause state, not about the token — it only goes
-  // to the primary chat/signal channels, never the public calls channel.
+  // own wallet/budget/chain-pause state, not about the token — it goes ONLY
+  // to the primary chat, never signal channels or the public calls channel.
   // Confirmed missing entirely on DRIP/0x93E562bd61FA7CD32B9EdE1A13be18C19bE852BD:
-  // a chain-pause skip leaves zero trace anywhere otherwise.
+  // a chain-pause skip leaves zero trace anywhere otherwise. Signal channels
+  // and the calls channel both get the same plain, shareable message.
   const adminMessage =
     realEligibility && !realEligibility.eligible
-      ? `${baseMessage}\n\n🔕 _Real trading skipped: ${escapeMd(realEligibility.reason)}_`
+      ? truncateForTelegram(`${baseMessage}\n\n🔕 _Real trading skipped: ${escapeMd(realEligibility.reason)}_`)
       : baseMessage;
-  const primaryMessageId = await broadcast(bot, truncateForTelegram(adminMessage));
-  // Separate, narrower list from destinations above — only calls that
-  // passed every guardrail reach here, meant for a public-facing
-  // channel/group. Additive: doesn't replace the primary chat/signal
-  // channels' own copy sent via broadcast() just above.
-  const publicMessage = truncateForTelegram(baseMessage);
-  for (const destination of config.telegram.callsChannels) {
+
+  let primaryMessageId = null;
+  try {
+    const sent = await bot.telegram.sendMessage(config.telegram.chatId, adminMessage, { parse_mode: "Markdown" });
+    primaryMessageId = sent.message_id;
+  } catch (err) {
+    console.error(`Failed to send call to primary chat:`, err.message);
+  }
+
+  for (const destination of [...config.telegram.signalChannels, ...config.telegram.callsChannels]) {
     try {
-      await bot.telegram.sendMessage(destination, publicMessage, { parse_mode: "Markdown" });
+      await bot.telegram.sendMessage(destination, baseMessage, { parse_mode: "Markdown" });
     } catch (err) {
-      console.error(`Failed to send call to calls channel ${destination}:`, err.message);
+      console.error(`Failed to send call to ${destination}:`, err.message);
     }
   }
   return primaryMessageId;
@@ -2833,6 +2837,38 @@ export async function postCall(bot, { chain, tokenAddress, riskResult, name, sym
 
 export async function postUpdate(bot, text, extra = {}) {
   return broadcast(bot, truncateForTelegram(text), extra);
+}
+
+// Sends ONLY to the primary admin chat — never signal channels, never the
+// calls channel. Real-money trading detail (open/close/failed trades,
+// wallet-adjacent activity) is the admin's own financial information, not
+// something a shared group should see, unlike calls/paper trades/rejections
+// which broadcast() carries everywhere on purpose. Confirmed this was
+// leaking before this fix: a real "REAL trade FAILED" message reached the
+// signal-channel group via the old postUpdate/postTradeCard calls in
+// realTrading.js, which only ever intended to notify the admin.
+export async function postAdminUpdate(bot, text, extra = {}) {
+  try {
+    await bot.telegram.sendMessage(config.telegram.chatId, truncateForTelegram(text), { parse_mode: "Markdown", ...extra });
+  } catch (err) {
+    console.error(`Failed to send admin update:`, err.message);
+  }
+}
+
+// Admin-only counterpart to postTradeCard, for the same reason as
+// postAdminUpdate above — used exclusively by real-trading open/close cards.
+export async function postAdminTradeCard(bot, { caption, imageBuffer }) {
+  const text = truncateCaption(caption);
+  try {
+    await bot.telegram.sendPhoto(config.telegram.chatId, { source: imageBuffer }, { caption: text, parse_mode: "Markdown" });
+  } catch (err) {
+    console.error(`Failed to send admin trade card:`, err.message);
+    try {
+      await bot.telegram.sendMessage(config.telegram.chatId, truncateForTelegram(caption), { parse_mode: "Markdown" });
+    } catch (err2) {
+      console.error(`Text fallback also failed for admin trade card:`, err2.message);
+    }
+  }
 }
 
 // Warns the calls-only channel(s) specifically that a call already posted

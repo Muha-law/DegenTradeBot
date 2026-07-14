@@ -19,7 +19,7 @@ import {
   touchRealComando,
   getCalledTokenSnapshot,
 } from "./store/db.js";
-import { postUpdate, postTradeCard, postCallAbort } from "./telegram/bot.js";
+import { postAdminUpdate, postAdminTradeCard, postCallAbort } from "./telegram/bot.js";
 import {
   buildRealTradeOpenMessage,
   buildRealTradeCloseMessage,
@@ -112,7 +112,7 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
   const liq = await checkFreshLiquidity(chain, tokenAddress);
   if (!liq.pass) {
     console.error(`[realTrading] ${symbol}: ${liq.reason} — aborting buy`);
-    await postUpdate(bot, buildRealTradeFailedMessage({ chain, tokenAddress, name, symbol, reason: liq.reason }));
+    await postAdminUpdate(bot, buildRealTradeFailedMessage({ chain, tokenAddress, name, symbol, reason: liq.reason }));
     return;
   }
 
@@ -121,7 +121,7 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
     result = await withSlippageRetry((bps) => buyToken(chain, tokenAddress, settings.positionSizeUsd, bps), settings.slippageBps);
   } catch (err) {
     console.error(`[realTrading] BUY FAILED for ${symbol} (${chain.key}) after slippage retries:`, err.message);
-    await postUpdate(bot, buildRealTradeFailedMessage({ chain, tokenAddress, name, symbol, reason: err.message }));
+    await postAdminUpdate(bot, buildRealTradeFailedMessage({ chain, tokenAddress, name, symbol, reason: err.message }));
     return;
   }
 
@@ -157,7 +157,7 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
   const sellCheck = await verifySellable(chain, tokenAddress, result.tokenAmountRaw, pairAddress);
   if (!sellCheck.sellable) {
     console.error(`[realTrading] ⚠️ SELLABILITY CHECK FAILED for ${symbol} (${chain.key}): ${sellCheck.reason} — likely honeypot, attempting immediate exit`);
-    await postUpdate(
+    await postAdminUpdate(
       bot,
       buildRealTradeFailedMessage({
         chain,
@@ -194,7 +194,7 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
         exitTxHash: sellResult.txHash,
         exitGasUsd: sellResult.gasUsd,
       });
-      await postTradeCard(bot, {
+      await postAdminTradeCard(bot, {
         caption: buildRealTradeCloseMessage({
           chain,
           tokenAddress,
@@ -234,7 +234,7 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
     return;
   }
 
-  await postTradeCard(bot, {
+  await postAdminTradeCard(bot, {
     caption: buildRealTradeOpenMessage({
       chain,
       tokenAddress,
@@ -305,7 +305,7 @@ async function reconcileIfBalanceVanished(bot, chain, t) {
     console.error(
       `[realTrading] ${t.symbol} (${t.chain}) balance vanished (recorded ${recorded}, actual ${actualBalance}) — written off as a total loss`
     );
-    await postUpdate(
+    await postAdminUpdate(
       bot,
       buildRealTradeFailedMessage({
         chain,
@@ -398,7 +398,7 @@ export function startRealTradeChecker(bot) {
                 exitTxHash: sellResult.txHash,
                 exitGasUsd: sellResult.gasUsd,
               });
-              await postTradeCard(bot, {
+              await postAdminTradeCard(bot, {
                 caption: buildRealTradeCloseMessage({
                   chain,
                   tokenAddress: t.token_address,
@@ -461,7 +461,7 @@ export function startRealTradeChecker(bot) {
             }
           } else if (settings.superComandoEnabled && pnlPct >= t.take_profit_pct && qualifiesForComando(t, settings)) {
             activateRealComandoMode(t.id, { peakPct: pnlPct });
-            await postUpdate(
+            await postAdminUpdate(
               bot,
               buildComandoActivatedMessage({ chain, tokenAddress: t.token_address, name: t.name, symbol: t.symbol, pnlPct, floorPct: t.take_profit_pct })
             );
@@ -500,7 +500,7 @@ export function startRealTradeChecker(bot) {
               exitTxHash: sellResult.txHash,
               exitGasUsd: sellResult.gasUsd,
             });
-            await postTradeCard(bot, {
+            await postAdminTradeCard(bot, {
               caption: buildRealTradeCloseMessage({
                 chain,
                 tokenAddress: t.token_address,
