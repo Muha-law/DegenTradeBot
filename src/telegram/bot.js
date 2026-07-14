@@ -1458,6 +1458,12 @@ export function createBot(stats, chainControls, digestControls) {
 
   bot.command("start", (ctx) => ctx.reply(welcomeText(), { parse_mode: "Markdown", ...mainMenuKeyboard() }));
 
+  // Read-only utility for wiring up a new broadcast destination (e.g. a
+  // channel/group meant to receive only calls) — Telegram gives no other way
+  // to learn a group's chat ID short of a third-party bot, several of which
+  // Telegram no longer allows into groups at all.
+  bot.command("chatid", (ctx) => ctx.reply(`Chat ID: \`${ctx.chat.id}\`\nType: ${ctx.chat.type}`, { parse_mode: "Markdown" }));
+
   bot.action("menu:botstats", async (ctx) => {
     await ctx.answerCbQuery();
     const count = countBotUsers();
