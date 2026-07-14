@@ -1451,19 +1451,16 @@ export function createBot(stats, chainControls, digestControls) {
 
   // Bot-wide access gate — drops the update before any handler (including
   // /start) ever sees it, rather than relying solely on the per-action
-  // isAdmin() checks below. Two cases:
-  //  1. The calls-only broadcast group(s) (TELEGRAM_CALLS_CHANNELS) stay a
-  //     pure announcement channel — members see the calls postCall() mirrors
-  //     there, but get zero interactive access, regardless of who they are.
-  //  2. A private DM from anyone but the configured admin is dropped
-  //     outright — someone in the calls group (or anyone who just finds the
-  //     bot's username) can't route around case 1 by messaging it directly.
-  // The admin's own DM (config.telegram.chatId) is unaffected either way.
+  // isAdmin() checks below. Deliberately chat-agnostic: any broadcast-only
+  // destination (the calls-only group, a TELEGRAM_SIGNAL_CHANNELS mirror, or
+  // any other group the bot ends up in) must stay a pure announcement feed,
+  // and a non-admin can't route around that by DMing the bot directly
+  // either — so the one rule that covers all of it is simply "only the
+  // admin gets any interactive response, anywhere". No adminUserId
+  // configured falls back to allowing everyone, same as isAdmin() below,
+  // for solo/private use where that's never been set.
   bot.use((ctx, next) => {
-    if (ctx.chat && config.telegram.callsChannels.includes(String(ctx.chat.id))) return;
-    if (ctx.chat?.type === "private" && config.telegram.adminUserId && String(ctx.from?.id) !== config.telegram.adminUserId) {
-      return;
-    }
+    if (config.telegram.adminUserId && String(ctx.from?.id) !== config.telegram.adminUserId) return;
     return next();
   });
 
