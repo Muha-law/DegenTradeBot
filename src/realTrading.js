@@ -115,6 +115,16 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
   if (!liq.pass) {
     console.error(`[realTrading] ${symbol}: ${liq.reason} — aborting buy`);
     await postAdminUpdate(bot, buildRealTradeFailedMessage({ chain, tokenAddress, name, symbol, reason: liq.reason }));
+    // This call already reached the group — a liquidity pull between the
+    // call and the buy is exactly a "this turned out bad" moment they need
+    // to hear about too, not just an internal skip.
+    await postCallAbort(bot, {
+      chain,
+      tokenAddress,
+      name,
+      symbol,
+      reason: "Liquidity was pulled before the buy went through — likely a rug pull. Don't buy.",
+    });
     return;
   }
 
@@ -126,7 +136,15 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
   if (!honeypotCheck.pass) {
     console.error(`[realTrading] ${symbol}: ${honeypotCheck.reason} — aborting buy`);
     await postAdminUpdate(bot, buildRealTradeFailedMessage({ chain, tokenAddress, name, symbol, reason: honeypotCheck.reason }));
-    await postCallAbort(bot, { chain, tokenAddress, name, symbol, reason: honeypotCheck.reason });
+    // Plain-language version for the group — the admin's message above
+    // keeps the technical "wasn't indexed yet" detail, this doesn't need it.
+    await postCallAbort(bot, {
+      chain,
+      tokenAddress,
+      name,
+      symbol,
+      reason: "Likely a honeypot — GoPlus now flags this token as unsellable. Don't buy.",
+    });
     return;
   }
 
