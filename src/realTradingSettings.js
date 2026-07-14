@@ -33,10 +33,23 @@ const DEFAULTS = {
   // Super Comando, but with real capital and real gas cost on every
   // AI-triggered exit check — see realTrading.js.
   superComandoEnabled: false,
+  // Per-chain override — a chain whose honeypot/rug rate has burned trust
+  // shouldn't need Comando turned off everywhere else too. Falls back to
+  // superComandoEnabled above for any chain without one.
+  superComandoEnabledByChain: {},
   // Only let a trade enter ride mode if its call-time 24h volume was at or
   // below this — see the matching field in paperTradingSettings.js for the
   // backtest this is based on.
   superComandoMaxCallVolumeUsd: 18000,
+  // 0/unset = no cap (the default — take-profit/stop-loss/Comando decide
+  // exits on their own timeline). A chain with a high honeypot rate can cap
+  // how long real money sits exposed regardless of P&L — this wins over
+  // take-profit, stop-loss, and Comando alike once it's hit.
+  maxHoldMinutes: 0,
+  // { [chainKey]: minutes } — per-chain override, same reasoning as
+  // superComandoEnabledByChain above. Confirmed real motivation: BSC's
+  // honeypot rate specifically, not a general policy change everywhere.
+  maxHoldMinutesByChain: {},
 };
 
 export function loadRealTradingSettings() {
@@ -84,5 +97,25 @@ export function getPositionSizeUsd(settings, chainKey) {
 
 export function setPositionSizeUsd(settings, chainKey, usd) {
   settings.positionSizeUsdByChain = { ...(settings.positionSizeUsdByChain || {}), [chainKey]: usd };
+  return settings;
+}
+
+export function isSuperComandoEnabled(settings, chainKey) {
+  const override = settings.superComandoEnabledByChain?.[chainKey];
+  return typeof override === "boolean" ? override : settings.superComandoEnabled;
+}
+
+export function setSuperComandoEnabled(settings, chainKey, enabled) {
+  settings.superComandoEnabledByChain = { ...(settings.superComandoEnabledByChain || {}), [chainKey]: enabled };
+  return settings;
+}
+
+export function getMaxHoldMinutes(settings, chainKey) {
+  const override = settings.maxHoldMinutesByChain?.[chainKey];
+  return typeof override === "number" ? override : settings.maxHoldMinutes;
+}
+
+export function setMaxHoldMinutes(settings, chainKey, minutes) {
+  settings.maxHoldMinutesByChain = { ...(settings.maxHoldMinutesByChain || {}), [chainKey]: minutes };
   return settings;
 }

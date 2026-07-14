@@ -1,7 +1,13 @@
 import cron from "node-cron";
 import { CHAINS } from "./chains.js";
 import { isPaused } from "./botState.js";
-import { loadRealTradingSettings, isChainTradingEnabled, getPositionSizeUsd } from "./realTradingSettings.js";
+import {
+  loadRealTradingSettings,
+  isChainTradingEnabled,
+  getPositionSizeUsd,
+  isSuperComandoEnabled,
+  getMaxHoldMinutes,
+} from "./realTradingSettings.js";
 import { getBestPair, pairSummary } from "./risk/dexscreener.js";
 import { checkFreshLiquidity, checkFreshHoneypotStatus } from "./filters/filter.js";
 import { shouldExitMooner } from "./ai/superComando.js";
@@ -508,7 +514,17 @@ export function startRealTradeChecker(bot) {
           const pnlPct = ((pair.priceUsd - t.entry_price_usd) / t.entry_price_usd) * 100;
           let exitReason = null;
 
-          if (settings.superComandoEnabled && t.comando_active) {
+          const maxHoldMinutes = getMaxHoldMinutes(settings, t.chain);
+          const holdMinutes = (Date.now() - t.entry_at) / 60000;
+          const comandoEnabled = isSuperComandoEnabled(settings, t.chain);
+
+          if (maxHoldMinutes > 0 && holdMinutes >= maxHoldMinutes) {
+            // Hard cap wins over everything below it — take-profit,
+            // stop-loss, and Super Comando alike. Checked first and skips
+            // the rest of the decision chain entirely: once this chain's
+            // time limit is hit, get out regardless of current P&L.
+            exitReason = "max_hold_time_exit";
+          } else if (comandoEnabled && t.comando_active) {
             if (pnlPct < t.take_profit_pct) {
               exitReason = "comando_floor";
             } else {
@@ -530,7 +546,7 @@ export function startRealTradeChecker(bot) {
                 touchRealComando(t.id, { peakPct, aiCheckedAt: t.comando_last_ai_check_at });
               }
             }
-          } else if (settings.superComandoEnabled && pnlPct >= t.take_profit_pct && qualifiesForComando(t, settings)) {
+          } else if (comandoEnabled && pnlPct >= t.take_profit_pct && qualifiesForComando(t, settings)) {
             activateRealComandoMode(t.id, { peakPct: pnlPct });
             await postAdminUpdate(
               bot,

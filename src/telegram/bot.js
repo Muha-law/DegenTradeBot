@@ -58,6 +58,10 @@ import {
   setChainTradingEnabled as setRealChainEnabled,
   getPositionSizeUsd,
   setPositionSizeUsd,
+  isSuperComandoEnabled,
+  setSuperComandoEnabled,
+  getMaxHoldMinutes,
+  setMaxHoldMinutes,
 } from "../realTradingSettings.js";
 import { hasWallet, getWalletAddress, getNativeBalance, resolveEnsName, getPrivateKeyForExport } from "../wallet.js";
 import { saveWalletPrivateKey } from "../walletSettings.js";
@@ -596,8 +600,9 @@ function realTradingKeyboard(settings, walletReady) {
     [Markup.button.callback(`Take profit: +${settings.takeProfitPct}%`, "realedit:takeProfitPct")],
     [Markup.button.callback(`Stop loss: ${settings.stopLossPct}%`, "realedit:stopLossPct")],
     [Markup.button.callback(`Slippage: ${(settings.slippageBps / 100).toFixed(1)}%`, "realedit:slippageBps")],
-    [Markup.button.callback(`🪖 Super Comando: ${settings.superComandoEnabled ? "ON (tap to turn off)" : "off (tap to turn on)"}`, "realcomandotoggle")],
+    [Markup.button.callback(`🪖 Super Comando (default): ${settings.superComandoEnabled ? "ON (tap to turn off)" : "off (tap to turn on)"}`, "realcomandotoggle")],
     [Markup.button.callback(`🪖 Comando max call volume: $${settings.superComandoMaxCallVolumeUsd}`, "realedit:superComandoMaxCallVolumeUsd")],
+    [Markup.button.callback("⏱ Per-chain risk controls (Comando / max hold time)", "menu:realriskcontrols")],
   ];
   // Manual trading terminal only appears once real trading is actually
   // enabled on at least one chain — it's meaningless (and riskier to
@@ -627,6 +632,27 @@ function realPositionSizesKeyboard(settings) {
     return [Markup.button.callback(label, `realpositionsizeedit:${c.key}`)];
   });
   rows.push([Markup.button.callback(`Default (fallback for other chains): $${settings.positionSizeUsd}`, "realedit:positionSizeUsd")]);
+  rows.push([Markup.button.callback("🔙 Real Funds Trading", "menu:realtrading")]);
+  return Markup.inlineKeyboard(rows);
+}
+
+// Per-chain Super Comando + max hold time — a chain with a rough honeypot
+// track record (confirmed real motivation: BSC) can be capped on its own
+// without changing behavior anywhere else. Max hold time is a hard cap that
+// wins over take-profit/stop-loss/Comando alike once hit — see
+// realTrading.js's checker loop.
+function realRiskControlsKeyboard(settings) {
+  const chains = getActiveChainDefs();
+  const rows = chains.flatMap((c) => {
+    const comandoOn = isSuperComandoEnabled(settings, c.key);
+    const maxHold = getMaxHoldMinutes(settings, c.key);
+    return [
+      [
+        Markup.button.callback(`${c.label} — Comando: ${comandoOn ? "🟢 ON" : "⚪️ off"}`, `realcomandochaintoggle:${c.key}`),
+        Markup.button.callback(`Max hold: ${maxHold > 0 ? maxHold + "m" : "none"}`, `realmaxholdedit:${c.key}`),
+      ],
+    ];
+  });
   rows.push([Markup.button.callback("🔙 Real Funds Trading", "menu:realtrading")]);
   return Markup.inlineKeyboard(rows);
 }
@@ -1350,6 +1376,23 @@ async function handlePendingAction(ctx, pending, text, digestControls) {
       parse_mode: "Markdown",
       ...backKeyboard(),
     });
+  }
+
+  if (pending.type === "realChainMaxHold") {
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const value = Number(text.trim());
+    if (!Number.isFinite(value) || value < 0) {
+      return ctx.reply("That doesn't look like a valid number of minutes — tap the chain again to retry.");
+    }
+    const settings = loadRealTradingSettings();
+    const prev = getMaxHoldMinutes(settings, pending.chainKey);
+    setMaxHoldMinutes(settings, pending.chainKey, value);
+    saveRealTradingSettings(settings);
+    const chainLabel = CHAINS[pending.chainKey]?.label || pending.chainKey;
+    return ctx.reply(
+      `Updated *${chainLabel}* max hold time: ${prev > 0 ? prev + "m" : "none"} → ${value > 0 ? value + "m" : "none"}`,
+      { parse_mode: "Markdown", ...backKeyboard() }
+    );
   }
 
   if (pending.type === "nftFilter") {
@@ -2083,6 +2126,42 @@ export function createBot(stats, chainControls, digestControls) {
     const current = getPositionSizeUsd(settings, chainKey);
     setPending(ctx.chat.id, { type: "realChainPositionSize", chainKey });
     await ctx.reply(`Send the new position size in USD for ${CHAINS[chainKey].label} (current: $${current}):`);
+  });
+
+  bot.action("menu:realriskcontrols", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    await ctx.answerCbQuery();
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const settings = loadRealTradingSettings();
+    await safeEdit(
+      ctx,
+      "⏱ *Per-Chain Risk Controls*\n\nMax hold time is a hard cap — once hit, the position exits regardless of current P&L, overriding take-profit/stop-loss/Comando alike. 0/none = no cap. Comando here overrides the default just for this chain.",
+      realRiskControlsKeyboard(settings)
+    );
+  });
+
+  bot.action(/^realcomandochaintoggle:(.+)$/, async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    await ctx.answerCbQuery();
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const chainKey = ctx.match[1];
+    if (!CHAINS[chainKey]) return ctx.reply("Unknown chain.");
+    const settings = loadRealTradingSettings();
+    setSuperComandoEnabled(settings, chainKey, !isSuperComandoEnabled(settings, chainKey));
+    saveRealTradingSettings(settings);
+    await safeEdit(ctx, "⏱ *Per-Chain Risk Controls*\n\nMax hold time is a hard cap — once hit, the position exits regardless of current P&L, overriding take-profit/stop-loss/Comando alike. 0/none = no cap. Comando here overrides the default just for this chain.", realRiskControlsKeyboard(settings));
+  });
+
+  bot.action(/^realmaxholdedit:(.+)$/, async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    await ctx.answerCbQuery();
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const chainKey = ctx.match[1];
+    if (!CHAINS[chainKey]) return ctx.reply("Unknown chain.");
+    const settings = loadRealTradingSettings();
+    const current = getMaxHoldMinutes(settings, chainKey);
+    setPending(ctx.chat.id, { type: "realChainMaxHold", chainKey });
+    await ctx.reply(`Send the max hold time in minutes for ${CHAINS[chainKey].label} (current: ${current > 0 ? current + "m" : "none"}, send 0 for no cap):`);
   });
 
   bot.action("menu:realmanual", async (ctx) => {

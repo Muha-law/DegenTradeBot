@@ -316,6 +316,10 @@ const REAL_CLOSE_HEADLINES = {
   // immediately after purchase — likely a honeypot, exited on the spot
   // rather than waiting for the normal checker cycle to discover it.
   honeypot_immediate_exit: "🚨 *REAL trade closed — HONEYPOT (immediate exit)*",
+  // maxHoldMinutes (global or per-chain) hit — a hard time cap that wins
+  // over take-profit/stop-loss/Super Comando regardless of current P&L.
+  // See realTradingSettings.js's getMaxHoldMinutes.
+  max_hold_time_exit: "⏱ *REAL trade closed — MAX HOLD TIME reached*",
 };
 
 export function buildRealTradeCloseMessage({ chain, tokenAddress, name, symbol, entryPriceUsd, exitPriceUsd, pnlUsd, pnlPct, exitReason, txHash, gasUsd }) {
