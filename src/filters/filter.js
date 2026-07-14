@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getBestPair, pairSummary } from "../risk/dexscreener.js";
+import { getTokenSecurity } from "../risk/goplus.js";
 import { getDataDir, seedFileIfMissing } from "../dataDir.js";
 
 const filtersPath = path.join(getDataDir(), "filters.json");
@@ -35,6 +36,30 @@ export async function checkFreshLiquidity(chain, tokenAddress) {
     };
   }
   return { pass: true, liquidityUsd };
+}
+
+// Re-checks GoPlus's honeypot verdict right before a real buy executes.
+// GoPlus can lag behind indexing a brand-new token by anywhere from seconds
+// to a couple minutes — the original computeRiskScore pass may have run
+// before GoPlus had anything on this token at all (an empty result,
+// indistinguishable in the score from "chain not covered"), but by the time
+// we're about to spend real money — after AI screens, the Telegram send,
+// etc. — GoPlus has often caught up. Confirmed live on SKHYB/BNB Chain:
+// GoPlus returned nothing at the original call, but re-querying it minutes
+// later showed is_honeypot: true — the correct answer existed, just not yet
+// when the bot first asked. Fails open (pass: true) on no data or a lookup
+// error — this is a bonus second chance to catch what the first pass
+// missed, not a new hard requirement for chains/tokens GoPlus never covers.
+export async function checkFreshHoneypotStatus(chain, tokenAddress) {
+  try {
+    const sec = await getTokenSecurity(chain.goplusChainId, tokenAddress);
+    if (sec && isTrue(sec.is_honeypot)) {
+      return { pass: false, reason: "GoPlus now flags this token as a honeypot (wasn't indexed yet at the original filter pass)" };
+    }
+    return { pass: true };
+  } catch {
+    return { pass: true };
+  }
 }
 
 // Decides whether a scored token gets "called". Returns { pass, reasons }.

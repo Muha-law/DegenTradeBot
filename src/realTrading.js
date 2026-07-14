@@ -3,7 +3,7 @@ import { CHAINS } from "./chains.js";
 import { isPaused } from "./botState.js";
 import { loadRealTradingSettings, isChainTradingEnabled, getPositionSizeUsd } from "./realTradingSettings.js";
 import { getBestPair, pairSummary } from "./risk/dexscreener.js";
-import { checkFreshLiquidity } from "./filters/filter.js";
+import { checkFreshLiquidity, checkFreshHoneypotStatus } from "./filters/filter.js";
 import { shouldExitMooner } from "./ai/superComando.js";
 import { buyToken, sellToken, verifySellable, withSlippageRetry, getTokenBalance } from "./execution/swapExecutor.js";
 import { hasWallet, getWalletAddress } from "./wallet.js";
@@ -115,6 +115,18 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
   if (!liq.pass) {
     console.error(`[realTrading] ${symbol}: ${liq.reason} — aborting buy`);
     await postAdminUpdate(bot, buildRealTradeFailedMessage({ chain, tokenAddress, name, symbol, reason: liq.reason }));
+    return;
+  }
+
+  // Same idea, for GoPlus specifically — confirmed live on SKHYB/BNB Chain:
+  // GoPlus hadn't indexed the token yet at the original filter pass (an
+  // empty result, scored as "no data" rather than a real honeypot flag),
+  // but by now — after AI screens, the Telegram send, etc. — it often has.
+  const honeypotCheck = await checkFreshHoneypotStatus(chain, tokenAddress);
+  if (!honeypotCheck.pass) {
+    console.error(`[realTrading] ${symbol}: ${honeypotCheck.reason} — aborting buy`);
+    await postAdminUpdate(bot, buildRealTradeFailedMessage({ chain, tokenAddress, name, symbol, reason: honeypotCheck.reason }));
+    await postCallAbort(bot, { chain, tokenAddress, name, symbol, reason: honeypotCheck.reason });
     return;
   }
 
