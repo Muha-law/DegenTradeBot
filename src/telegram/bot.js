@@ -1,4 +1,5 @@
 import { Telegraf, Markup } from "telegraf";
+import { Wallet } from "ethers";
 import { config } from "../config.js";
 import { CHAINS } from "../chains.js";
 import { getActiveChainDefs, isChainEnabled } from "../chainSettings.js";
@@ -56,7 +57,8 @@ import {
   isAnyChainTradingEnabled as isAnyRealChainEnabled,
   setChainTradingEnabled as setRealChainEnabled,
 } from "../realTradingSettings.js";
-import { hasWallet, getWalletAddress, getNativeBalance, resolveEnsName } from "../wallet.js";
+import { hasWallet, getWalletAddress, getNativeBalance, resolveEnsName, getPrivateKeyForExport } from "../wallet.js";
+import { saveWalletPrivateKey } from "../walletSettings.js";
 import { sellToken, buyTokenWithNativeAmount, withSlippageRetry } from "../execution/swapExecutor.js";
 import { estimateV2PriceImpact } from "../risk/priceImpact.js";
 import { renderOpenCard, renderCloseCard } from "./tradeCard.js";
@@ -422,7 +424,8 @@ function mainMenuKeyboard() {
     ...(config.openseaApiKey
       ? [[Markup.button.callback(`🖼 Real Trading — NFTs: ${nftRealEnabled ? "🔴 LIVE" : "⚪️ off"}`, "menu:nftrealtrading")]]
       : []),
-    [Markup.button.callback("💳 Wallet Balance", "menu:walletbalance"), Markup.button.callback("📊 Bot Stats", "menu:botstats")],
+    [Markup.button.callback("💳 Wallet Balance", "menu:walletbalance"), Markup.button.callback("🔑 Wallet Setup", "menu:wallet")],
+    [Markup.button.callback("📊 Bot Stats", "menu:botstats")],
     ...(config.openseaApiKey ? [[Markup.button.callback("🖼 NFTs", "menu:nft")]] : []),
   ]);
 }
@@ -731,6 +734,32 @@ function closeAllConfirmKeyboard() {
   return Markup.inlineKeyboard([
     [Markup.button.callback("✅ Yes, close everything", "paperclosall")],
     [Markup.button.callback("❌ Cancel", "menu:papertrading")],
+  ]);
+}
+
+function walletMenuKeyboard(hasWalletConfigured) {
+  const rows = [
+    [Markup.button.callback(hasWalletConfigured ? "🆕 Replace with new wallet" : "🆕 Create new wallet", "walletcreateconfirm")],
+    [Markup.button.callback("📥 Import private key", "walletimportconfirm")],
+  ];
+  if (hasWalletConfigured) {
+    rows.push([Markup.button.callback("👁 Reveal private key", "walletreveal")]);
+  }
+  rows.push([Markup.button.callback("🔙 Menu", "menu:home")]);
+  return Markup.inlineKeyboard(rows);
+}
+
+function walletCreateConfirmKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("✅ Yes, create a new wallet", "walletcreate")],
+    [Markup.button.callback("❌ Cancel", "menu:wallet")],
+  ]);
+}
+
+function walletImportConfirmKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("✅ Yes, I have a private key ready", "walletimportstart")],
+    [Markup.button.callback("❌ Cancel", "menu:wallet")],
   ]);
 }
 
@@ -1411,6 +1440,22 @@ async function handlePendingAction(ctx, pending, text, digestControls) {
     return performIdSell(ctx, pending.id, pct);
   }
 
+  if (pending.type === "walletImportKey") {
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const rawKey = text.trim();
+    // Scrub the raw key from chat history immediately, whether or not it
+    // turns out to be valid — it shouldn't linger either way.
+    await ctx.deleteMessage(ctx.message.message_id).catch(() => {});
+    let wallet;
+    try {
+      wallet = new Wallet(rawKey);
+    } catch {
+      return ctx.reply("That doesn't look like a valid private key — tap Import private key again to retry.");
+    }
+    saveWalletPrivateKey(wallet.privateKey);
+    return ctx.reply(`✅ *Wallet imported*\n\n\`${wallet.address}\``, { parse_mode: "Markdown", ...backKeyboard() });
+  }
+
   const args = text.trim().split(/\s+/).filter(Boolean);
   const usage = "Send a contract address, or `<chain> <address>` if it's listed on more than one.";
   const resolved = await resolveChainAndAddress(ctx, args, usage);
@@ -1558,6 +1603,101 @@ export function createBot(stats, chainControls, digestControls) {
     if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
     await ctx.answerCbQuery();
     await renderWalletBalance(ctx);
+  });
+
+  // Best-effort summary of what the CURRENT wallet holds, shown before
+  // create/import overwrites it — creating or importing a new key doesn't
+  // move any existing funds, it just points the bot at a different wallet,
+  // so anything left in the old one becomes unmanaged unless withdrawn first.
+  async function summarizeCurrentWalletFunds() {
+    const address = getWalletAddress();
+    if (!address) return null;
+    const parts = [];
+    for (const [key, def] of Object.entries(CHAINS)) {
+      const chain = { key, ...def };
+      const bal = await getNativeBalance(chain).catch(() => null);
+      if (bal && bal > 0) parts.push(`${bal.toFixed(6)} ${def.nativeSymbol} (${def.label})`);
+    }
+    return { address, parts };
+  }
+
+  bot.action("menu:wallet", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    await ctx.answerCbQuery();
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const address = getWalletAddress();
+    const text = address
+      ? `🔑 *Wallet Setup*\n\nCurrent wallet:\n\`${address}\`\n\nCreating or importing a new key replaces this — it does NOT move existing funds. Withdraw first if this wallet holds anything you want to keep.`
+      : `🔑 *Wallet Setup*\n\nNo wallet configured yet.`;
+    await safeEdit(ctx, text, walletMenuKeyboard(Boolean(address)));
+  });
+
+  bot.action("walletcreateconfirm", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    await ctx.answerCbQuery();
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const current = await summarizeCurrentWalletFunds();
+    const lines = ["🆕 *Create a new wallet?*", ""];
+    if (current) {
+      lines.push(`Current wallet \`${current.address}\` will stop being used.`);
+      lines.push(current.parts.length ? `It still holds: ${current.parts.join(", ")}` : "It has no funds detected on any configured chain.");
+      lines.push("", "Those funds do NOT move automatically — withdraw them first if you want to keep them.");
+    }
+    lines.push("", "The new wallet's private key will be shown once, right after creation. Save it immediately — it won't be shown again automatically (use Reveal later if needed).");
+    await safeEdit(ctx, lines.join("\n"), walletCreateConfirmKeyboard());
+  });
+
+  bot.action("walletcreate", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    await ctx.answerCbQuery("Creating…");
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const wallet = Wallet.createRandom();
+    saveWalletPrivateKey(wallet.privateKey);
+    await safeEdit(ctx, `✅ *New wallet created*\n\n\`${wallet.address}\``, walletMenuKeyboard(true));
+    const sent = await ctx.reply(
+      `🔐 Private key (save this now — this message self-deletes in 60s):\n\n\`${wallet.privateKey}\``,
+      { parse_mode: "Markdown" }
+    );
+    setTimeout(() => {
+      ctx.deleteMessage(sent.message_id).catch(() => {});
+    }, 60_000);
+  });
+
+  bot.action("walletimportconfirm", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    await ctx.answerCbQuery();
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const current = await summarizeCurrentWalletFunds();
+    const lines = ["📥 *Import a private key?*", ""];
+    if (current) {
+      lines.push(`Current wallet \`${current.address}\` will stop being used.`);
+      lines.push(current.parts.length ? `It still holds: ${current.parts.join(", ")}` : "It has no funds detected on any configured chain.");
+      lines.push("", "Those funds do NOT move automatically — withdraw them first if you want to keep them.");
+    }
+    lines.push("", "You'll be asked to paste the private key next — your message gets deleted immediately after the bot reads it.");
+    await safeEdit(ctx, lines.join("\n"), walletImportConfirmKeyboard());
+  });
+
+  bot.action("walletimportstart", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    await ctx.answerCbQuery();
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    setPending(ctx.chat.id, { type: "walletImportKey" });
+    await ctx.reply("Send the private key to import (starts with `0x`). Your message will be deleted right after this is processed.", {
+      parse_mode: "Markdown",
+    });
+  });
+
+  bot.action("walletreveal", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    await ctx.answerCbQuery();
+    if (!(await requireRealTradingUnlock(ctx))) return;
+    const privateKey = getPrivateKeyForExport();
+    if (!privateKey) return ctx.reply("No wallet configured.");
+    const sent = await ctx.reply(`🔐 Private key (this message self-deletes in 60s):\n\n\`${privateKey}\``, { parse_mode: "Markdown" });
+    setTimeout(() => {
+      ctx.deleteMessage(sent.message_id).catch(() => {});
+    }, 60_000);
   });
 
   bot.action("menu:home", async (ctx) => {

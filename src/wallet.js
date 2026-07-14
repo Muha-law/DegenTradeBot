@@ -1,6 +1,7 @@
 import { Wallet, JsonRpcProvider, formatEther } from "ethers";
 import { config } from "./config.js";
 import { CHAINS } from "./chains.js";
+import { loadWalletPrivateKey } from "./walletSettings.js";
 
 // Per-chain HTTP providers, built lazily and cached. Real trading needs
 // eth_sendRawTransaction (write), which the existing per-chain WSS RPCs
@@ -22,21 +23,38 @@ export function getProvider(chain) {
   return providerCache.get(chain.key);
 }
 
+// The persisted store (set via Telegram — /wallet create or import) takes
+// priority over the WALLET_PRIVATE_KEY env var, so changing it live never
+// needs a redeploy. Re-read on every call rather than cached at module load,
+// since it can change at any time while the bot is running.
+function currentPrivateKey() {
+  return loadWalletPrivateKey() || config.walletPrivateKey || null;
+}
+
 // Returns a Wallet connected to the given chain, or null if no private key
 // is configured — callers must treat null as "real trading unavailable",
 // never fall back to a dummy signer.
 export function getWalletForChain(chain) {
-  if (!config.walletPrivateKey) return null;
-  return new Wallet(config.walletPrivateKey, getProvider(chain));
+  const privateKey = currentPrivateKey();
+  if (!privateKey) return null;
+  return new Wallet(privateKey, getProvider(chain));
 }
 
 export function hasWallet() {
-  return Boolean(config.walletPrivateKey);
+  return Boolean(currentPrivateKey());
 }
 
 export function getWalletAddress() {
-  if (!config.walletPrivateKey) return null;
-  return new Wallet(config.walletPrivateKey).address;
+  const privateKey = currentPrivateKey();
+  if (!privateKey) return null;
+  return new Wallet(privateKey).address;
+}
+
+// Deliberately named distinctly from the getters above — this hands back the
+// raw private key, not just an address. Only for the Telegram wallet-reveal
+// flow (admin + passcode gated there), never for anything on a hot path.
+export function getPrivateKeyForExport() {
+  return currentPrivateKey();
 }
 
 export async function getNativeBalance(chain) {
