@@ -2643,7 +2643,19 @@ async function broadcast(bot, message, extra = {}) {
 
 export async function postCall(bot, { chain, tokenAddress, riskResult, name, symbol }) {
   const message = truncateForTelegram(buildCallMessage({ chain, tokenAddress, riskResult, name, symbol }));
-  return broadcast(bot, message);
+  const primaryMessageId = await broadcast(bot, message);
+  // Separate, narrower list from destinations above — only calls that
+  // passed every guardrail reach here, meant for a public-facing
+  // channel/group. Additive: doesn't replace the primary chat/signal
+  // channels' own copy sent via broadcast() just above.
+  for (const destination of config.telegram.callsChannels) {
+    try {
+      await bot.telegram.sendMessage(destination, message, { parse_mode: "Markdown" });
+    } catch (err) {
+      console.error(`Failed to send call to calls channel ${destination}:`, err.message);
+    }
+  }
+  return primaryMessageId;
 }
 
 export async function postUpdate(bot, text, extra = {}) {

@@ -16,11 +16,22 @@ const extraDestinations = (process.env.TELEGRAM_SIGNAL_CHANNELS || "")
   .map((s) => s.trim())
   .filter(Boolean);
 
+// A separate, narrower broadcast list from the one above — only postCall()
+// sends here, i.e. only tokens that passed every guardrail (filters,
+// selective-honeypot probe, optional AI screens), not trade updates, errors,
+// or anything else broadcast() carries. Meant for a public-facing
+// channel/group meant to be shared, additive to the primary chat.
+const callsChannels = (process.env.TELEGRAM_CALLS_CHANNELS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 export const config = {
   telegram: {
     botToken: required("TELEGRAM_BOT_TOKEN"),
     chatId: primaryChatId,
     destinations: [primaryChatId, ...extraDestinations],
+    callsChannels,
     adminUserId: process.env.ADMIN_USER_ID ? String(process.env.ADMIN_USER_ID) : null,
   },
   // Active chains are managed dynamically — see chainSettings.js.
