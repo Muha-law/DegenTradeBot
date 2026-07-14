@@ -10,7 +10,7 @@ import {
 } from "./store/db.js";
 import { postCall, postUpdate } from "./telegram/bot.js";
 import { openPaperTradeIfRoom } from "./paperTrading.js";
-import { openRealTradeIfRoom } from "./realTrading.js";
+import { openRealTradeIfRoom, checkRealTradeEligibility } from "./realTrading.js";
 import { screenForRugPatterns } from "./ai/rugDetector.js";
 import { analyzeRugRisk } from "./ai/rugAnalyst.js";
 import { probeSellability } from "./risk/sellability.js";
@@ -125,7 +125,14 @@ export async function evaluateToken(bot, { chain, dexName, pairAddress, tokenAdd
     }
   }
 
-  const messageId = await postCall(bot, { chain, tokenAddress, riskResult, name, symbol });
+  // Best-effort, read-only preview of whether this call will even get a real
+  // buy attempt — surfaced directly in the call message so a chain being
+  // paused (or budget being full) is visible in the moment, not only
+  // discoverable later by digging through the DB. See
+  // realTrading.js's checkRealTradeEligibility for what this does and
+  // doesn't check.
+  const realEligibility = checkRealTradeEligibility(chain);
+  const messageId = await postCall(bot, { chain, tokenAddress, riskResult, name, symbol, realEligibility });
 
   const sec = riskResult.security;
   const top10Pct = sec?.holders?.length ? sec.holders.slice(0, 10).reduce((s, h) => s + (Number(h.percent) || 0), 0) * 100 : null;

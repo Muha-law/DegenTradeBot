@@ -60,6 +60,31 @@ function qualifiesForComando(trade, settings) {
   return snapshot.call_volume24h_usd <= settings.superComandoMaxCallVolumeUsd;
 }
 
+// Read-only preview of whether openRealTradeIfRoom below would even attempt
+// a buy for this call — mirrors its two silent, no-Telegram-trace gates
+// (chain toggle, budget) so the call message can say so up front. Confirmed
+// missing live on DRIP/0x93E562bd61FA7CD32B9EdE1A13be18C19bE852BD: Robinhood
+// Chain's real-trading toggle was off in the exact few-minute window that
+// call landed (mid-cleanup of unrelated stuck positions), and the skip left
+// zero trace anywhere — not even a log line — discoverable only by a DB dig
+// well after the fact. Deliberately doesn't check the fresh liquidity re-check
+// or router/wallet/price gates — those either always hold in practice or
+// already post their own visible failure message when they don't.
+export function checkRealTradeEligibility(chain) {
+  const settings = loadRealTradingSettings();
+  if (!isChainTradingEnabled(settings, chain.key)) {
+    return { eligible: false, reason: "real trading is OFF for this chain" };
+  }
+  if (!hasWallet()) {
+    return { eligible: false, reason: "no wallet configured" };
+  }
+  const stats = getRealTradingStats();
+  if (stats.deployedUsd + settings.positionSizeUsd > settings.totalBudgetUsd) {
+    return { eligible: false, reason: `budget full ($${stats.deployedUsd.toFixed(0)}/$${settings.totalBudgetUsd} deployed)` };
+  }
+  return { eligible: true };
+}
+
 // Called whenever a real call passes the filter. Executes an actual on-chain
 // buy, budget-capped by realTradingSettings, only if real trading is
 // explicitly enabled for THIS chain and a wallet is configured. No-ops
@@ -313,50 +338,162 @@ async function reconcileIfBalanceVanished(bot, chain, t) {
 }
 
 export function startRealTradeChecker(bot) {
-  const task = cron.schedule(CHECK_CRON, async () => {
-    if (isPaused()) return;
-    const settings = loadRealTradingSettings();
-    // Deliberately NOT gated on any chain's enabledChains here — an already-
-    // open position must keep being monitored/exited even if that chain's
-    // real trading was since paused, otherwise pausing a chain mid-trade
-    // would strand the position with no way to ever hit stop-loss.
-    const open = getOpenRealTrades();
-    for (const t of open) {
-      const chainDef = CHAINS[t.chain];
-      if (!chainDef) continue;
-      const chain = { key: t.chain, ...chainDef };
+  // Without this, an overlapping run (this cycle's work still in flight
+  // when the next tick fires) could have two invocations both see the same
+  // position as open and both attempt to sell it concurrently from the
+  // same wallet — nonce conflicts and duplicate gas spend on what's meant
+  // to be one sale, not a race. Same pattern as recheckQueue.js/
+  // priceUpdater.js/trackUpdater.js's existing guards.
+  let running = false;
 
-      try {
-        const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
-        const pair = pairSummary(dexPair, t.token_address);
-        const liquidityDust = pair && (!pair.liquidityUsd || pair.liquidityUsd < MIN_REALIZABLE_LIQUIDITY_USD);
-        if (!pair || !isSanePrice(pair.priceUsd) || liquidityDust) {
-          const staleMinutes = t.price_unavailable_since ? (Date.now() - t.price_unavailable_since) / 60000 : 0;
-          if (t.price_unavailable_since && staleMinutes >= STALE_PRICE_EXIT_MINUTES) {
-            // Sustained unreadable price — most likely a drained/dead pool.
-            // Force a real sell attempt anyway rather than leave this stuck
-            // forever with no way to ever hit stop-loss (this is exactly
-            // what let a position sit unmanaged once its pool's liquidity
-            // got drained to near-zero). Whatever proceeds come back are
-            // real, even if near zero; if the sell itself fails (e.g. truly
-            // zero liquidity), leave it open and retry next cycle — same
-            // discipline as any other exit attempt in this loop.
-            console.error(`[realTrading] ${t.symbol} (${t.chain}) price unavailable for ${staleMinutes.toFixed(0)}m — forcing sell attempt`);
+  const task = cron.schedule(CHECK_CRON, async () => {
+    if (isPaused() || running) return;
+    running = true;
+    try {
+      const settings = loadRealTradingSettings();
+      // Deliberately NOT gated on any chain's enabledChains here — an already-
+      // open position must keep being monitored/exited even if that chain's
+      // real trading was since paused, otherwise pausing a chain mid-trade
+      // would strand the position with no way to ever hit stop-loss.
+      const open = getOpenRealTrades();
+      for (const t of open) {
+        const chainDef = CHAINS[t.chain];
+        if (!chainDef) continue;
+        const chain = { key: t.chain, ...chainDef };
+
+        try {
+          const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
+          const pair = pairSummary(dexPair, t.token_address);
+          const liquidityDust = pair && (!pair.liquidityUsd || pair.liquidityUsd < MIN_REALIZABLE_LIQUIDITY_USD);
+          if (!pair || !isSanePrice(pair.priceUsd) || liquidityDust) {
+            const staleMinutes = t.price_unavailable_since ? (Date.now() - t.price_unavailable_since) / 60000 : 0;
+            if (t.price_unavailable_since && staleMinutes >= STALE_PRICE_EXIT_MINUTES) {
+              // Sustained unreadable price — most likely a drained/dead pool.
+              // Force a real sell attempt anyway rather than leave this stuck
+              // forever with no way to ever hit stop-loss (this is exactly
+              // what let a position sit unmanaged once its pool's liquidity
+              // got drained to near-zero). Whatever proceeds come back are
+              // real, even if near zero; if the sell itself fails (e.g. truly
+              // zero liquidity), leave it open and retry next cycle — same
+              // discipline as any other exit attempt in this loop.
+              console.error(`[realTrading] ${t.symbol} (${t.chain}) price unavailable for ${staleMinutes.toFixed(0)}m — forcing sell attempt`);
+              let sellResult;
+              try {
+                sellResult = await withSlippageRetry((bps) => sellToken(chain, t.token_address, t.token_amount_raw, bps), settings.slippageBps);
+              } catch (err) {
+                console.error(`[realTrading] stale-price forced sell failed for ${t.symbol} (${t.chain}) after slippage retries:`, err.message);
+                const reconciled = await reconcileIfBalanceVanished(bot, chain, t);
+                if (!reconciled) touchRealTradeStalePrice(t.id);
+                continue;
+              }
+
+              const pnlUsd = sellResult.proceedsUsd - t.position_size_usd - t.entry_gas_usd - sellResult.gasUsd;
+              const realizedPnlPct = (pnlUsd / t.position_size_usd) * 100;
+              closeRealTrade(t.id, {
+                exitPriceUsd: 0,
+                exitReason: "stale_price_exit",
+                pnlUsd,
+                pnlPct: realizedPnlPct,
+                nativeReceived: sellResult.nativeReceived,
+                exitTxHash: sellResult.txHash,
+                exitGasUsd: sellResult.gasUsd,
+              });
+              await postTradeCard(bot, {
+                caption: buildRealTradeCloseMessage({
+                  chain,
+                  tokenAddress: t.token_address,
+                  name: t.name,
+                  symbol: t.symbol,
+                  entryPriceUsd: t.entry_price_usd,
+                  exitPriceUsd: 0,
+                  pnlUsd,
+                  pnlPct: realizedPnlPct,
+                  exitReason: "stale_price_exit",
+                  txHash: sellResult.txHash,
+                  gasUsd: sellResult.gasUsd,
+                }),
+                imageBuffer: await renderCloseCard({
+                  chainLabel: chain.label,
+                  symbol: t.symbol,
+                  name: t.name,
+                  tradeMode: "real",
+                  entryPriceUsd: t.entry_price_usd,
+                  entryMarketCapUsd: t.entry_market_cap_usd,
+                  exitPriceUsd: 0,
+                  currentMarketCapUsd: null,
+                  pnlUsd,
+                  pnlPct: realizedPnlPct,
+                  exitReason: "stale_price_exit",
+                  tokenAddress: t.token_address,
+                  holdDurationMs: Date.now() - t.entry_at,
+                }),
+              });
+            } else {
+              touchRealTradeStalePrice(t.id);
+            }
+            continue;
+          }
+
+          const pnlPct = ((pair.priceUsd - t.entry_price_usd) / t.entry_price_usd) * 100;
+          let exitReason = null;
+
+          if (settings.superComandoEnabled && t.comando_active) {
+            if (pnlPct < t.take_profit_pct) {
+              exitReason = "comando_floor";
+            } else {
+              const peakPct = Math.max(t.comando_peak_pct ?? pnlPct, pnlPct);
+              const dueForAiCheck = Date.now() - (t.comando_last_ai_check_at || 0) >= COMANDO_AI_CHECK_INTERVAL_MS;
+              if (dueForAiCheck) {
+                const minutesHeld = (Date.now() - t.comando_activated_at) / 60000;
+                const verdict = await shouldExitMooner({
+                  symbol: t.symbol,
+                  name: t.name,
+                  pnlPct,
+                  peakPct,
+                  floorPct: t.take_profit_pct,
+                  minutesHeld,
+                });
+                touchRealComando(t.id, { peakPct, aiCheckedAt: Date.now() });
+                if (verdict.sell) exitReason = "comando_ai_exit";
+              } else {
+                touchRealComando(t.id, { peakPct, aiCheckedAt: t.comando_last_ai_check_at });
+              }
+            }
+          } else if (settings.superComandoEnabled && pnlPct >= t.take_profit_pct && qualifiesForComando(t, settings)) {
+            activateRealComandoMode(t.id, { peakPct: pnlPct });
+            await postUpdate(
+              bot,
+              buildComandoActivatedMessage({ chain, tokenAddress: t.token_address, name: t.name, symbol: t.symbol, pnlPct, floorPct: t.take_profit_pct })
+            );
+          } else if (pnlPct >= t.take_profit_pct) {
+            exitReason = "take_profit";
+          } else if (pnlPct <= t.stop_loss_pct) {
+            exitReason = "stop_loss";
+          }
+
+          if (exitReason) {
             let sellResult;
             try {
               sellResult = await withSlippageRetry((bps) => sellToken(chain, t.token_address, t.token_amount_raw, bps), settings.slippageBps);
             } catch (err) {
-              console.error(`[realTrading] stale-price forced sell failed for ${t.symbol} (${t.chain}) after slippage retries:`, err.message);
+              // Sell reverted or failed even across the slippage ladder —
+              // position is still genuinely open on-chain. Leave it open and
+              // retry next cycle rather than mark it closed on a transaction
+              // that never happened.
+              console.error(`[realTrading] SELL FAILED for ${t.symbol} (${t.chain}), exitReason=${exitReason}, after slippage retries:`, err.message);
               const reconciled = await reconcileIfBalanceVanished(bot, chain, t);
-              if (!reconciled) touchRealTradeStalePrice(t.id);
+              if (!reconciled) touchRealTrade(t.id);
               continue;
             }
 
+            // Real realized PnL — actual sale proceeds minus what was put in
+            // and both legs' real gas cost, not derived from price % (which
+            // ignores slippage and fee-on-transfer token losses).
             const pnlUsd = sellResult.proceedsUsd - t.position_size_usd - t.entry_gas_usd - sellResult.gasUsd;
             const realizedPnlPct = (pnlUsd / t.position_size_usd) * 100;
             closeRealTrade(t.id, {
-              exitPriceUsd: 0,
-              exitReason: "stale_price_exit",
+              exitPriceUsd: pair.priceUsd,
+              exitReason,
               pnlUsd,
               pnlPct: realizedPnlPct,
               nativeReceived: sellResult.nativeReceived,
@@ -370,10 +507,10 @@ export function startRealTradeChecker(bot) {
                 name: t.name,
                 symbol: t.symbol,
                 entryPriceUsd: t.entry_price_usd,
-                exitPriceUsd: 0,
+                exitPriceUsd: pair.priceUsd,
                 pnlUsd,
                 pnlPct: realizedPnlPct,
-                exitReason: "stale_price_exit",
+                exitReason,
                 txHash: sellResult.txHash,
                 gasUsd: sellResult.gasUsd,
               }),
@@ -384,123 +521,24 @@ export function startRealTradeChecker(bot) {
                 tradeMode: "real",
                 entryPriceUsd: t.entry_price_usd,
                 entryMarketCapUsd: t.entry_market_cap_usd,
-                exitPriceUsd: 0,
-                currentMarketCapUsd: null,
+                exitPriceUsd: pair.priceUsd,
+                currentMarketCapUsd: pair.marketCapUsd,
                 pnlUsd,
                 pnlPct: realizedPnlPct,
-                exitReason: "stale_price_exit",
+                exitReason,
                 tokenAddress: t.token_address,
                 holdDurationMs: Date.now() - t.entry_at,
               }),
             });
           } else {
-            touchRealTradeStalePrice(t.id);
+            touchRealTrade(t.id);
           }
-          continue;
+        } catch (err) {
+          console.error(`[realTrading] failed to check ${t.symbol} (${t.chain}):`, err.message);
         }
-
-        const pnlPct = ((pair.priceUsd - t.entry_price_usd) / t.entry_price_usd) * 100;
-        let exitReason = null;
-
-        if (settings.superComandoEnabled && t.comando_active) {
-          if (pnlPct < t.take_profit_pct) {
-            exitReason = "comando_floor";
-          } else {
-            const peakPct = Math.max(t.comando_peak_pct ?? pnlPct, pnlPct);
-            const dueForAiCheck = Date.now() - (t.comando_last_ai_check_at || 0) >= COMANDO_AI_CHECK_INTERVAL_MS;
-            if (dueForAiCheck) {
-              const minutesHeld = (Date.now() - t.comando_activated_at) / 60000;
-              const verdict = await shouldExitMooner({
-                symbol: t.symbol,
-                name: t.name,
-                pnlPct,
-                peakPct,
-                floorPct: t.take_profit_pct,
-                minutesHeld,
-              });
-              touchRealComando(t.id, { peakPct, aiCheckedAt: Date.now() });
-              if (verdict.sell) exitReason = "comando_ai_exit";
-            } else {
-              touchRealComando(t.id, { peakPct, aiCheckedAt: t.comando_last_ai_check_at });
-            }
-          }
-        } else if (settings.superComandoEnabled && pnlPct >= t.take_profit_pct && qualifiesForComando(t, settings)) {
-          activateRealComandoMode(t.id, { peakPct: pnlPct });
-          await postUpdate(
-            bot,
-            buildComandoActivatedMessage({ chain, tokenAddress: t.token_address, name: t.name, symbol: t.symbol, pnlPct, floorPct: t.take_profit_pct })
-          );
-        } else if (pnlPct >= t.take_profit_pct) {
-          exitReason = "take_profit";
-        } else if (pnlPct <= t.stop_loss_pct) {
-          exitReason = "stop_loss";
-        }
-
-        if (exitReason) {
-          let sellResult;
-          try {
-            sellResult = await withSlippageRetry((bps) => sellToken(chain, t.token_address, t.token_amount_raw, bps), settings.slippageBps);
-          } catch (err) {
-            // Sell reverted or failed even across the slippage ladder —
-            // position is still genuinely open on-chain. Leave it open and
-            // retry next cycle rather than mark it closed on a transaction
-            // that never happened.
-            console.error(`[realTrading] SELL FAILED for ${t.symbol} (${t.chain}), exitReason=${exitReason}, after slippage retries:`, err.message);
-            const reconciled = await reconcileIfBalanceVanished(bot, chain, t);
-            if (!reconciled) touchRealTrade(t.id);
-            continue;
-          }
-
-          // Real realized PnL — actual sale proceeds minus what was put in
-          // and both legs' real gas cost, not derived from price % (which
-          // ignores slippage and fee-on-transfer token losses).
-          const pnlUsd = sellResult.proceedsUsd - t.position_size_usd - t.entry_gas_usd - sellResult.gasUsd;
-          const realizedPnlPct = (pnlUsd / t.position_size_usd) * 100;
-          closeRealTrade(t.id, {
-            exitPriceUsd: pair.priceUsd,
-            exitReason,
-            pnlUsd,
-            pnlPct: realizedPnlPct,
-            nativeReceived: sellResult.nativeReceived,
-            exitTxHash: sellResult.txHash,
-            exitGasUsd: sellResult.gasUsd,
-          });
-          await postTradeCard(bot, {
-            caption: buildRealTradeCloseMessage({
-              chain,
-              tokenAddress: t.token_address,
-              name: t.name,
-              symbol: t.symbol,
-              entryPriceUsd: t.entry_price_usd,
-              exitPriceUsd: pair.priceUsd,
-              pnlUsd,
-              pnlPct: realizedPnlPct,
-              exitReason,
-              txHash: sellResult.txHash,
-              gasUsd: sellResult.gasUsd,
-            }),
-            imageBuffer: await renderCloseCard({
-              chainLabel: chain.label,
-              symbol: t.symbol,
-              name: t.name,
-              tradeMode: "real",
-              entryPriceUsd: t.entry_price_usd,
-              entryMarketCapUsd: t.entry_market_cap_usd,
-              exitPriceUsd: pair.priceUsd,
-              currentMarketCapUsd: pair.marketCapUsd,
-              pnlUsd,
-              pnlPct: realizedPnlPct,
-              exitReason,
-              tokenAddress: t.token_address,
-              holdDurationMs: Date.now() - t.entry_at,
-            }),
-          });
-        } else {
-          touchRealTrade(t.id);
-        }
-      } catch (err) {
-        console.error(`[realTrading] failed to check ${t.symbol} (${t.chain}):`, err.message);
       }
+    } finally {
+      running = false;
     }
   });
 

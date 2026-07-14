@@ -2804,16 +2804,26 @@ async function broadcast(bot, message, extra = {}) {
   return primaryMessageId;
 }
 
-export async function postCall(bot, { chain, tokenAddress, riskResult, name, symbol }) {
-  const message = truncateForTelegram(buildCallMessage({ chain, tokenAddress, riskResult, name, symbol }));
-  const primaryMessageId = await broadcast(bot, message);
+export async function postCall(bot, { chain, tokenAddress, riskResult, name, symbol, realEligibility }) {
+  const baseMessage = buildCallMessage({ chain, tokenAddress, riskResult, name, symbol });
+  // The "real trading skipped" note is operational detail about the admin's
+  // own wallet/budget/chain-pause state, not about the token — it only goes
+  // to the primary chat/signal channels, never the public calls channel.
+  // Confirmed missing entirely on DRIP/0x93E562bd61FA7CD32B9EdE1A13be18C19bE852BD:
+  // a chain-pause skip leaves zero trace anywhere otherwise.
+  const adminMessage =
+    realEligibility && !realEligibility.eligible
+      ? `${baseMessage}\n\n🔕 _Real trading skipped: ${escapeMd(realEligibility.reason)}_`
+      : baseMessage;
+  const primaryMessageId = await broadcast(bot, truncateForTelegram(adminMessage));
   // Separate, narrower list from destinations above — only calls that
   // passed every guardrail reach here, meant for a public-facing
   // channel/group. Additive: doesn't replace the primary chat/signal
   // channels' own copy sent via broadcast() just above.
+  const publicMessage = truncateForTelegram(baseMessage);
   for (const destination of config.telegram.callsChannels) {
     try {
-      await bot.telegram.sendMessage(destination, message, { parse_mode: "Markdown" });
+      await bot.telegram.sendMessage(destination, publicMessage, { parse_mode: "Markdown" });
     } catch (err) {
       console.error(`Failed to send call to calls channel ${destination}:`, err.message);
     }

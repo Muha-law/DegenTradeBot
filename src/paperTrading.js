@@ -128,31 +128,121 @@ export async function openPaperTradeIfRoom(bot, { chain, tokenAddress, symbol, n
 }
 
 export function startPaperTradeChecker(bot) {
-  const task = cron.schedule(CHECK_CRON, async () => {
-    if (isPaused()) return;
-    const settings = loadPaperTradingSettings();
-    // Deliberately NOT gated on any chain's enabledChains here — see the
-    // matching comment in realTrading.js's checker.
-    const open = getOpenPaperTrades();
-    for (const t of open) {
-      const chainDef = CHAINS[t.chain];
-      if (!chainDef) continue;
-      const chain = { key: t.chain, ...chainDef };
+  // Without this, an overlapping run (this cycle's work still in flight
+  // when the next tick fires) could have two invocations both see the same
+  // position as open and race each other closing it. Same pattern as
+  // realTrading.js/recheckQueue.js/priceUpdater.js/trackUpdater.js's
+  // existing guards.
+  let running = false;
 
-      try {
-        const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
-        const pair = pairSummary(dexPair, t.token_address);
-        const liquidityDust = pair && (!pair.liquidityUsd || pair.liquidityUsd < MIN_REALIZABLE_LIQUIDITY_USD);
-        if (!pair || !isSanePrice(pair.priceUsd) || liquidityDust) {
-          const staleMinutes = t.price_unavailable_since ? (Date.now() - t.price_unavailable_since) / 60000 : 0;
-          if (t.price_unavailable_since && staleMinutes >= STALE_PRICE_EXIT_MINUTES) {
-            // Sustained unreadable price — most likely a drained/dead pool.
-            // No real price exists to simulate an exit at, so assume a
-            // total loss rather than leave this stuck forever with no way
-            // to ever hit stop-loss.
-            const pnlUsd = -t.position_size_usd;
-            const pnlPct = -100;
-            closePaperTrade(t.id, { exitPriceUsd: 0, exitReason: "stale_price", pnlUsd, pnlPct });
+  const task = cron.schedule(CHECK_CRON, async () => {
+    if (isPaused() || running) return;
+    running = true;
+    try {
+      const settings = loadPaperTradingSettings();
+      // Deliberately NOT gated on any chain's enabledChains here — see the
+      // matching comment in realTrading.js's checker.
+      const open = getOpenPaperTrades();
+      for (const t of open) {
+        const chainDef = CHAINS[t.chain];
+        if (!chainDef) continue;
+        const chain = { key: t.chain, ...chainDef };
+
+        try {
+          const dexPair = await getBestPair(chainDef.dexscreenerChainId, t.token_address);
+          const pair = pairSummary(dexPair, t.token_address);
+          const liquidityDust = pair && (!pair.liquidityUsd || pair.liquidityUsd < MIN_REALIZABLE_LIQUIDITY_USD);
+          if (!pair || !isSanePrice(pair.priceUsd) || liquidityDust) {
+            const staleMinutes = t.price_unavailable_since ? (Date.now() - t.price_unavailable_since) / 60000 : 0;
+            if (t.price_unavailable_since && staleMinutes >= STALE_PRICE_EXIT_MINUTES) {
+              // Sustained unreadable price — most likely a drained/dead pool.
+              // No real price exists to simulate an exit at, so assume a
+              // total loss rather than leave this stuck forever with no way
+              // to ever hit stop-loss.
+              const pnlUsd = -t.position_size_usd;
+              const pnlPct = -100;
+              closePaperTrade(t.id, { exitPriceUsd: 0, exitReason: "stale_price", pnlUsd, pnlPct });
+              await postTradeCard(bot, {
+                caption: buildPaperTradeCloseMessage({
+                  chain,
+                  tokenAddress: t.token_address,
+                  name: t.name,
+                  symbol: t.symbol,
+                  entryPriceUsd: t.entry_price_usd,
+                  exitPriceUsd: 0,
+                  pnlUsd,
+                  pnlPct,
+                  exitReason: "stale_price",
+                }),
+                imageBuffer: await renderCloseCard({
+                  chainLabel: chain.label,
+                  symbol: t.symbol,
+                  name: t.name,
+                  tradeMode: "paper",
+                  entryPriceUsd: t.entry_price_usd,
+                  entryMarketCapUsd: t.entry_market_cap_usd,
+                  exitPriceUsd: 0,
+                  currentMarketCapUsd: null,
+                  pnlUsd,
+                  pnlPct,
+                  exitReason: "stale_price",
+                  tokenAddress: t.token_address,
+                  holdDurationMs: Date.now() - t.entry_at,
+                }),
+              });
+            } else {
+              touchPaperTradeStalePrice(t.id);
+            }
+            continue;
+          }
+
+          const pnlPct = ((pair.priceUsd - t.entry_price_usd) / t.entry_price_usd) * 100;
+          let exitReason = null;
+
+          if (settings.superComandoEnabled && t.comando_active) {
+            // Already riding — take_profit_pct is now a protected floor, not
+            // a sell target. Below it, close immediately regardless of AI;
+            // at/above it, ask the (throttled) AI whether this is the moment
+            // to bank the bigger gain or keep letting it run.
+            if (pnlPct < t.take_profit_pct) {
+              exitReason = "comando_floor";
+            } else {
+              const peakPct = Math.max(t.comando_peak_pct ?? pnlPct, pnlPct);
+              const dueForAiCheck = Date.now() - (t.comando_last_ai_check_at || 0) >= COMANDO_AI_CHECK_INTERVAL_MS;
+              if (dueForAiCheck) {
+                const minutesHeld = (Date.now() - t.comando_activated_at) / 60000;
+                const verdict = await shouldExitMooner({
+                  symbol: t.symbol,
+                  name: t.name,
+                  pnlPct,
+                  peakPct,
+                  floorPct: t.take_profit_pct,
+                  minutesHeld,
+                });
+                touchComando(t.id, { peakPct, aiCheckedAt: Date.now() });
+                if (verdict.sell) exitReason = "comando_ai_exit";
+              } else {
+                touchComando(t.id, { peakPct, aiCheckedAt: t.comando_last_ai_check_at });
+              }
+            }
+          } else if (settings.superComandoEnabled && pnlPct >= t.take_profit_pct && qualifiesForComando(t, settings)) {
+            // Just crossed the take-profit target, and this token's call-time
+            // profile matches the backtested "genuine mover" signature —
+            // instead of closing, hand it over to ride mode.
+            activateComandoMode(t.id, { peakPct: pnlPct });
+            await postUpdate(
+              bot,
+              buildComandoActivatedMessage({ chain, tokenAddress: t.token_address, name: t.name, symbol: t.symbol, pnlPct, floorPct: t.take_profit_pct })
+            );
+          } else if (pnlPct >= t.take_profit_pct) {
+            exitReason = "take_profit";
+          } else if (pnlPct <= t.stop_loss_pct) {
+            exitReason = "stop_loss";
+          }
+
+          if (exitReason) {
+            const pnlUsd = t.position_size_usd * (pnlPct / 100);
+            closePaperTrade(t.id, { exitPriceUsd: pair.priceUsd, exitReason, pnlUsd, pnlPct });
             await postTradeCard(bot, {
               caption: buildPaperTradeCloseMessage({
                 chain,
@@ -160,10 +250,10 @@ export function startPaperTradeChecker(bot) {
                 name: t.name,
                 symbol: t.symbol,
                 entryPriceUsd: t.entry_price_usd,
-                exitPriceUsd: 0,
+                exitPriceUsd: pair.priceUsd,
                 pnlUsd,
                 pnlPct,
-                exitReason: "stale_price",
+                exitReason,
               }),
               imageBuffer: await renderCloseCard({
                 chainLabel: chain.label,
@@ -172,102 +262,24 @@ export function startPaperTradeChecker(bot) {
                 tradeMode: "paper",
                 entryPriceUsd: t.entry_price_usd,
                 entryMarketCapUsd: t.entry_market_cap_usd,
-                exitPriceUsd: 0,
-                currentMarketCapUsd: null,
+                exitPriceUsd: pair.priceUsd,
+                currentMarketCapUsd: pair.marketCapUsd,
                 pnlUsd,
                 pnlPct,
-                exitReason: "stale_price",
+                exitReason,
                 tokenAddress: t.token_address,
                 holdDurationMs: Date.now() - t.entry_at,
               }),
             });
           } else {
-            touchPaperTradeStalePrice(t.id);
+            touchPaperTrade(t.id);
           }
-          continue;
+        } catch (err) {
+          console.error(`[paperTrading] failed to check ${t.symbol} (${t.chain}):`, err.message);
         }
-
-        const pnlPct = ((pair.priceUsd - t.entry_price_usd) / t.entry_price_usd) * 100;
-        let exitReason = null;
-
-        if (settings.superComandoEnabled && t.comando_active) {
-          // Already riding — take_profit_pct is now a protected floor, not
-          // a sell target. Below it, close immediately regardless of AI;
-          // at/above it, ask the (throttled) AI whether this is the moment
-          // to bank the bigger gain or keep letting it run.
-          if (pnlPct < t.take_profit_pct) {
-            exitReason = "comando_floor";
-          } else {
-            const peakPct = Math.max(t.comando_peak_pct ?? pnlPct, pnlPct);
-            const dueForAiCheck = Date.now() - (t.comando_last_ai_check_at || 0) >= COMANDO_AI_CHECK_INTERVAL_MS;
-            if (dueForAiCheck) {
-              const minutesHeld = (Date.now() - t.comando_activated_at) / 60000;
-              const verdict = await shouldExitMooner({
-                symbol: t.symbol,
-                name: t.name,
-                pnlPct,
-                peakPct,
-                floorPct: t.take_profit_pct,
-                minutesHeld,
-              });
-              touchComando(t.id, { peakPct, aiCheckedAt: Date.now() });
-              if (verdict.sell) exitReason = "comando_ai_exit";
-            } else {
-              touchComando(t.id, { peakPct, aiCheckedAt: t.comando_last_ai_check_at });
-            }
-          }
-        } else if (settings.superComandoEnabled && pnlPct >= t.take_profit_pct && qualifiesForComando(t, settings)) {
-          // Just crossed the take-profit target, and this token's call-time
-          // profile matches the backtested "genuine mover" signature —
-          // instead of closing, hand it over to ride mode.
-          activateComandoMode(t.id, { peakPct: pnlPct });
-          await postUpdate(
-            bot,
-            buildComandoActivatedMessage({ chain, tokenAddress: t.token_address, name: t.name, symbol: t.symbol, pnlPct, floorPct: t.take_profit_pct })
-          );
-        } else if (pnlPct >= t.take_profit_pct) {
-          exitReason = "take_profit";
-        } else if (pnlPct <= t.stop_loss_pct) {
-          exitReason = "stop_loss";
-        }
-
-        if (exitReason) {
-          const pnlUsd = t.position_size_usd * (pnlPct / 100);
-          closePaperTrade(t.id, { exitPriceUsd: pair.priceUsd, exitReason, pnlUsd, pnlPct });
-          await postTradeCard(bot, {
-            caption: buildPaperTradeCloseMessage({
-              chain,
-              tokenAddress: t.token_address,
-              name: t.name,
-              symbol: t.symbol,
-              entryPriceUsd: t.entry_price_usd,
-              exitPriceUsd: pair.priceUsd,
-              pnlUsd,
-              pnlPct,
-              exitReason,
-            }),
-            imageBuffer: await renderCloseCard({
-              chainLabel: chain.label,
-              symbol: t.symbol,
-              name: t.name,
-              tradeMode: "paper",
-              entryPriceUsd: t.entry_price_usd,
-              entryMarketCapUsd: t.entry_market_cap_usd,
-              exitPriceUsd: pair.priceUsd,
-              currentMarketCapUsd: pair.marketCapUsd,
-              pnlUsd,
-              pnlPct,
-              exitReason,
-              tokenAddress: t.token_address,
-              holdDurationMs: Date.now() - t.entry_at,
-            }),
-          });
-        } else {
-          touchPaperTrade(t.id);
-        }
-      } catch (err) {
-        console.error(`[paperTrading] failed to check ${t.symbol} (${t.chain}):`, err.message);
       }
+    } finally {
+      running = false;
     }
   });
 
