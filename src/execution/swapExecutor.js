@@ -43,6 +43,19 @@ const DEAD_ADDRESS = "0x000000000000000000000000000000000000dEaD";
 // currency. Every wrapped-native token on an EVM chain implements this.
 const WETH_ABI = ["function withdraw(uint256 wad)", "function balanceOf(address) view returns (uint256)"];
 
+// A distinct, non-retryable failure: the swap transaction itself confirmed
+// on-chain (real money spent, real gas paid) but the buyer's balance never
+// increased — the token blocks/nullifies delivery on the BUY side, a
+// different honeypot mechanism than "can't sell" (which verifySellable and
+// probeSellability check for). Confirmed live on SKHYB/BNB Chain:
+// withSlippageRetry used to treat this identically to an ordinary revert and
+// retry with more slippage tolerance — but each "retry" is a brand new real
+// purchase, not a resend of a failed transaction, so retrying just bought
+// the same guaranteed-nothing outcome twice more before the wallet ran too
+// low to try a third time. More slippage tolerance can never fix a token
+// that doesn't deliver at all, so this must never be retried.
+export class UndeliveredTokensError extends Error {}
+
 // Hard ceiling independent of realTradingSettings.json — defense in depth
 // so a settings-file bug or bad input can never size an *automated* trade
 // far beyond what was ever intended, no matter what positionSizeUsd says.
@@ -93,6 +106,12 @@ export async function withSlippageRetry(attempt, configuredBps) {
       if (i > 0) console.log(`[slippageRetry] succeeded on attempt ${i + 1}/${ladder.length} at ${ladder[i] / 100}% slippage`);
       return result;
     } catch (err) {
+      // A confirmed-but-delivered-nothing buy already spent real money on
+      // this exact rung — retrying at higher slippage doesn't resend a
+      // failed transaction, it executes a brand new real purchase for the
+      // same guaranteed-zero outcome. Stop immediately instead of paying
+      // for the same non-result again.
+      if (err instanceof UndeliveredTokensError) throw err;
       lastErr = err;
       console.error(`[slippageRetry] attempt ${i + 1}/${ladder.length} (${ladder[i] / 100}% slippage) failed: ${err.message}`);
     }
@@ -299,7 +318,11 @@ async function executeBuy(chain, tokenAddress, nativeAmount, nativeUsdPrice, sli
 
   const balAfter = await token.balanceOf(wallet.address);
   const tokenAmountRaw = balAfter - balBefore;
-  if (tokenAmountRaw <= 0n) throw new Error(`Buy tx confirmed but no tokens received: ${receipt.hash}`);
+  if (tokenAmountRaw <= 0n) {
+    throw new UndeliveredTokensError(
+      `Buy tx confirmed but no tokens received (token blocks delivery on purchase — likely a honeypot): ${receipt.hash}`
+    );
+  }
 
   const tokenAmountHuman = Number(tokenAmountRaw) / 10 ** Number(decimals);
   const gasUsd = Number(formatEther(receipt.gasUsed * receipt.gasPrice)) * nativeUsdPrice;
