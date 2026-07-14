@@ -5,7 +5,7 @@ import { loadRealTradingSettings, isChainTradingEnabled, getPositionSizeUsd } fr
 import { getBestPair, pairSummary } from "./risk/dexscreener.js";
 import { checkFreshLiquidity, checkFreshHoneypotStatus } from "./filters/filter.js";
 import { shouldExitMooner } from "./ai/superComando.js";
-import { buyToken, sellToken, verifySellable, withSlippageRetry, getTokenBalance, UndeliveredTokensError } from "./execution/swapExecutor.js";
+import { buyToken, sellToken, verifySellable, withSlippageRetry, getTokenBalance, SwapDeliveredNothingError } from "./execution/swapExecutor.js";
 import { hasWallet, getWalletAddress } from "./wallet.js";
 import {
   openRealTrade,
@@ -160,7 +160,7 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
     // timing. Worded differently from the admin's own message above: that
     // one shows the raw technical error for debugging, this is the
     // plain-language version for anyone who saw the original call.
-    if (err instanceof UndeliveredTokensError) {
+    if (err instanceof SwapDeliveredNothingError) {
       await postCallAbort(bot, {
         chain,
         tokenAddress,

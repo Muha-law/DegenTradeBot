@@ -44,17 +44,18 @@ const DEAD_ADDRESS = "0x000000000000000000000000000000000000dEaD";
 const WETH_ABI = ["function withdraw(uint256 wad)", "function balanceOf(address) view returns (uint256)"];
 
 // A distinct, non-retryable failure: the swap transaction itself confirmed
-// on-chain (real money spent, real gas paid) but the buyer's balance never
-// increased — the token blocks/nullifies delivery on the BUY side, a
-// different honeypot mechanism than "can't sell" (which verifySellable and
-// probeSellability check for). Confirmed live on SKHYB/BNB Chain:
-// withSlippageRetry used to treat this identically to an ordinary revert and
-// retry with more slippage tolerance — but each "retry" is a brand new real
-// purchase, not a resend of a failed transaction, so retrying just bought
-// the same guaranteed-nothing outcome twice more before the wallet ran too
-// low to try a third time. More slippage tolerance can never fix a token
-// that doesn't deliver at all, so this must never be retried.
-export class UndeliveredTokensError extends Error {}
+// on-chain (real money/tokens spent, real gas paid) but the expected side of
+// the trade never arrived — no tokens on a buy, no native currency on a
+// sell. Same honeypot mechanism either direction, a different one than
+// "can't sell" (which verifySellable/probeSellability check for). Confirmed
+// live on SKHYB/BNB Chain (buy side): withSlippageRetry used to treat this
+// identically to an ordinary revert and retry with more slippage tolerance —
+// but each "retry" is a brand new real swap, not a resend of a failed
+// transaction, so retrying just repeated the same guaranteed-nothing outcome
+// twice more before the wallet ran too low to try a third time. More
+// slippage tolerance can never fix a token that doesn't deliver at all on
+// either side, so this must never be retried.
+export class SwapDeliveredNothingError extends Error {}
 
 // Hard ceiling independent of realTradingSettings.json — defense in depth
 // so a settings-file bug or bad input can never size an *automated* trade
@@ -106,12 +107,12 @@ export async function withSlippageRetry(attempt, configuredBps) {
       if (i > 0) console.log(`[slippageRetry] succeeded on attempt ${i + 1}/${ladder.length} at ${ladder[i] / 100}% slippage`);
       return result;
     } catch (err) {
-      // A confirmed-but-delivered-nothing buy already spent real money on
-      // this exact rung — retrying at higher slippage doesn't resend a
-      // failed transaction, it executes a brand new real purchase for the
-      // same guaranteed-zero outcome. Stop immediately instead of paying
-      // for the same non-result again.
-      if (err instanceof UndeliveredTokensError) throw err;
+      // A confirmed-but-delivered-nothing swap already spent real money/
+      // tokens on this exact rung — retrying at higher slippage doesn't
+      // resend a failed transaction, it executes a brand new real swap for
+      // the same guaranteed-zero outcome. Stop immediately instead of
+      // paying for the same non-result again.
+      if (err instanceof SwapDeliveredNothingError) throw err;
       lastErr = err;
       console.error(`[slippageRetry] attempt ${i + 1}/${ladder.length} (${ladder[i] / 100}% slippage) failed: ${err.message}`);
     }
@@ -319,7 +320,7 @@ async function executeBuy(chain, tokenAddress, nativeAmount, nativeUsdPrice, sli
   const balAfter = await token.balanceOf(wallet.address);
   const tokenAmountRaw = balAfter - balBefore;
   if (tokenAmountRaw <= 0n) {
-    throw new UndeliveredTokensError(
+    throw new SwapDeliveredNothingError(
       `Buy tx confirmed but no tokens received (token blocks delivery on purchase — likely a honeypot): ${receipt.hash}`
     );
   }
@@ -443,7 +444,11 @@ export async function sellToken(chain, tokenAddress, tokenAmountRaw, slippageBps
 
     const wethBalAfter = await weth.balanceOf(wallet.address);
     const wethReceived = wethBalAfter - wethBalBefore;
-    if (wethReceived <= 0n) throw new Error(`Sell tx confirmed but no WETH received: ${swapReceipt.hash}`);
+    if (wethReceived <= 0n) {
+      throw new SwapDeliveredNothingError(
+        `Sell tx confirmed but no WETH received (token blocks delivery on sale — likely a honeypot): ${swapReceipt.hash}`
+      );
+    }
 
     const unwrapTx = await weth.withdraw(wethReceived);
     const unwrapReceipt = await unwrapTx.wait();
@@ -484,7 +489,18 @@ export async function sellToken(chain, tokenAddress, tokenAmountRaw, slippageBps
     const nativeBalAfter = await wallet.provider.getBalance(wallet.address);
     // Balance delta already nets out this tx's own gas cost (paid from the
     // same balance), so add the gas back to isolate the actual swap proceeds.
-    nativeReceived = Number(formatEther(nativeBalAfter - nativeBalBefore + receipt.gasUsed * receipt.gasPrice));
+    const proceedsWei = nativeBalAfter - nativeBalBefore + receipt.gasUsed * receipt.gasPrice;
+    // The V3 branch above already checked this (a confirmed swap that
+    // delivers zero of the expected side is a honeypot symptom, not a
+    // slippage problem) — this branch had no equivalent check at all before,
+    // silently recording a $0-proceeds close instead of recognizing the
+    // pattern and refusing to retry it.
+    if (proceedsWei <= 0n) {
+      throw new SwapDeliveredNothingError(
+        `Sell tx confirmed but no native currency received (token blocks delivery on sale — likely a honeypot): ${receipt.hash}`
+      );
+    }
+    nativeReceived = Number(formatEther(proceedsWei));
   }
 
   // nativeUsdPrice can be null on a best-effort exit with no price source at
