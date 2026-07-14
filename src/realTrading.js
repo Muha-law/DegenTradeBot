@@ -19,7 +19,7 @@ import {
   touchRealComando,
   getCalledTokenSnapshot,
 } from "./store/db.js";
-import { postUpdate, postTradeCard } from "./telegram/bot.js";
+import { postUpdate, postTradeCard, postCallAbort } from "./telegram/bot.js";
 import {
   buildRealTradeOpenMessage,
   buildRealTradeCloseMessage,
@@ -142,6 +142,15 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
         reason: `⚠️ Bought successfully, but a sellability check right after failed — likely a honeypot: ${sellCheck.reason}. Attempting immediate exit.`,
       })
     );
+    // This exact call was just posted to the calls-only channel(s) — anyone
+    // who acted on it needs to know to abort/exit, not just the admin.
+    await postCallAbort(bot, {
+      chain,
+      tokenAddress,
+      name,
+      symbol,
+      reason: `Sellability check failed right after buying — likely a honeypot (${sellCheck.reason}). Do not buy; sell immediately if you already did.`,
+    });
     try {
       // Deliberately not using withSlippageRetry here — verifySellable just
       // predicted this exact sell would fail because the token's own
@@ -281,6 +290,16 @@ async function reconcileIfBalanceVanished(bot, chain, t) {
         reason: `⚠️ Sell kept failing — actual wallet balance (${actualBalance}) is far below what was recorded (${recorded}), with no explaining transfer. Likely the contract silently seized/burned the holding. Written off as a total loss ($${t.position_size_usd.toFixed(2)}).`,
       })
     );
+    // This token was called and posted to the calls-only channel(s) at
+    // entry — anyone who bought based on that call needs to know it turned
+    // out to be a rug, not just the admin.
+    await postCallAbort(bot, {
+      chain,
+      tokenAddress: t.token_address,
+      name: t.name,
+      symbol: t.symbol,
+      reason: "Wallet balance vanished with no explaining transfer — likely the contract silently seized/burned the holding. Treat as a confirmed rug.",
+    });
     return true;
   }
 

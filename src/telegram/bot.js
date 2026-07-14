@@ -1449,14 +1449,21 @@ export function createBot(stats, chainControls, digestControls) {
   // Keep Telegram's "/" autocomplete minimal — buttons are the primary nav now.
   bot.telegram.setMyCommands([{ command: "start", description: "Open the menu" }]).catch(() => {});
 
-  // A calls-only broadcast destination (TELEGRAM_CALLS_CHANNELS) must stay a
-  // pure announcement group — members see the calls postCall() mirrors
-  // there, but get zero interactive access to the bot, regardless of who
-  // they are (this isn't isAdmin-gated per action; it drops the update
-  // before any handler, including /start, ever sees it). The admin manages
-  // the bot from the primary chat, not from here.
+  // Bot-wide access gate — drops the update before any handler (including
+  // /start) ever sees it, rather than relying solely on the per-action
+  // isAdmin() checks below. Two cases:
+  //  1. The calls-only broadcast group(s) (TELEGRAM_CALLS_CHANNELS) stay a
+  //     pure announcement channel — members see the calls postCall() mirrors
+  //     there, but get zero interactive access, regardless of who they are.
+  //  2. A private DM from anyone but the configured admin is dropped
+  //     outright — someone in the calls group (or anyone who just finds the
+  //     bot's username) can't route around case 1 by messaging it directly.
+  // The admin's own DM (config.telegram.chatId) is unaffected either way.
   bot.use((ctx, next) => {
     if (ctx.chat && config.telegram.callsChannels.includes(String(ctx.chat.id))) return;
+    if (ctx.chat?.type === "private" && config.telegram.adminUserId && String(ctx.from?.id) !== config.telegram.adminUserId) {
+      return;
+    }
     return next();
   });
 
@@ -2679,6 +2686,25 @@ export async function postCall(bot, { chain, tokenAddress, riskResult, name, sym
 
 export async function postUpdate(bot, text, extra = {}) {
   return broadcast(bot, truncateForTelegram(text), extra);
+}
+
+// Warns the calls-only channel(s) specifically that a call already posted
+// there has turned out bad — a post-buy sellability check failed (likely a
+// honeypot the pre-buy probe missed) or the position's balance vanished
+// later. Distinct from postUpdate: this must reach channel followers who
+// may have acted on the original call, not just the admin's primary chat.
+export async function postCallAbort(bot, { chain, tokenAddress, name, symbol, reason }) {
+  if (config.telegram.callsChannels.length === 0) return;
+  const message = truncateForTelegram(
+    `🚨 *ABORT* — ${escapeMd(name) || "Unknown"} (${escapeMd(symbol) || "?"}) on ${chain.label}\n\n${reason}\n\n\`${tokenAddress}\``
+  );
+  for (const destination of config.telegram.callsChannels) {
+    try {
+      await bot.telegram.sendMessage(destination, message, { parse_mode: "Markdown" });
+    } catch (err) {
+      console.error(`Failed to send abort notice to calls channel ${destination}:`, err.message);
+    }
+  }
 }
 
 // Same as postUpdate, but for NFT-side messages specifically (trade opens/
