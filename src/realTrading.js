@@ -192,8 +192,19 @@ export async function openRealTradeIfRoom(bot, { chain, tokenAddress, pairAddres
   if (res.changes === 0) {
     // Bought on-chain but a row already existed for this token (shouldn't
     // happen given hasBeenCalled dedup upstream, but never silently strand
-    // a real position untracked).
+    // a real position untracked). Real money was just spent with nothing
+    // tracking it — this needs the admin's eyes, not just a server log line.
     console.error(`[realTrading] bought ${symbol} but DB row already existed — tx ${result.txHash} needs manual reconciliation`);
+    await postAdminUpdate(
+      bot,
+      buildRealTradeFailedMessage({
+        chain,
+        tokenAddress,
+        name,
+        symbol,
+        reason: `⚠️ Bought on-chain successfully (tx ${result.txHash}), but a DB row already existed for this token, so it isn't being tracked. This needs manual reconciliation — check the wallet's actual holdings.`,
+      })
+    );
     return;
   }
 
@@ -377,10 +388,23 @@ async function reconcileIfBalanceVanished(bot, chain, t) {
 
   // Some real balance left, just less than recorded (partial drain, or a
   // taxed/rebasing transfer) — correct the record so the next cycle retries
-  // a sellable amount instead of repeating the same impossible one.
+  // a sellable amount instead of repeating the same impossible one. Quieter
+  // than a full write-off, but still real: the position's actual size just
+  // changed without you doing anything, worth knowing about, not just a
+  // server log line.
   const correctedUsd = t.position_size_usd * (Number(actualBalance) / Number(recorded));
   reduceRealTrade(t.id, { tokenAmountRaw: actualBalance.toString(), positionSizeUsd: correctedUsd });
   console.error(`[realTrading] ${t.symbol} (${t.chain}) balance mismatch — corrected recorded amount from ${recorded} to ${actualBalance}`);
+  await postAdminUpdate(
+    bot,
+    buildRealTradeFailedMessage({
+      chain,
+      tokenAddress: t.token_address,
+      name: t.name,
+      symbol: t.symbol,
+      reason: `ℹ️ Position size auto-corrected: wallet balance (${actualBalance}) is below what was recorded (${recorded}), with no full write-off warranted. Recorded size adjusted from $${t.position_size_usd.toFixed(2)} to $${correctedUsd.toFixed(2)} — likely a taxed/rebasing token or a partial drain.`,
+    })
+  );
   return true;
 }
 
