@@ -4,6 +4,7 @@ import { getBestPair, pairSummary } from "../risk/dexscreener.js";
 import { getTokenSecurity } from "../risk/goplus.js";
 import { getDataDir, seedFileIfMissing } from "../dataDir.js";
 import { scoreRugProbability } from "../ai/rugClassifier.js";
+import { scoreOwnRugProbability } from "../ai/ourRugClassifier.js";
 
 const filtersPath = path.join(getDataDir(), "filters.json");
 
@@ -15,8 +16,9 @@ const filtersPath = path.join(getDataDir(), "filters.json");
 const DEFAULTS = {
   requireRoundTripTaxCheck: true,
   maxLiquidityToMarketCapRatio: 0.6,
-  // Off by default — see the rug-probability gate in applyFilter for why.
+  // Off by default — see the rug-probability gates in applyFilter for why.
   maxRugProbability: 0,
+  maxOwnRugProbability: 0,
 };
 
 export function loadFilters() {
@@ -162,6 +164,29 @@ export function applyFilter(riskResult, tokenAgeMinutes, { chainKey, launchSourc
     });
     if (rugProbability > filters.maxRugProbability) {
       reasons.push(`AI rug model: ${(rugProbability * 100).toFixed(0)}% rug probability above maximum ${(filters.maxRugProbability * 100).toFixed(0)}%`);
+    }
+  }
+
+  // Our own logistic regression (src/ai/ourRugModelArtifact.json), trained
+  // on our own 110 closed paper trades — label is exit_reason='stale_price'
+  // (our dead-pool/rug detector). Cross-validated AUC 0.951, chronological
+  // held-out AUC 0.926 (train on older 70% by entry_at, test on strictly
+  // newer ones) — both well above the ported model's 0.702 on this same
+  // dataset, as expected since this one is actually calibrated to our token
+  // population. Still 0/unset off by default: n=110 is all from one ~4-day
+  // window, and a model that looks great on 4 days of data isn't proven to
+  // hold up for months. Retrain periodically via scripts/trainRugModel.py
+  // as more calls close, rather than treating this as a one-time result.
+  if (filters.maxOwnRugProbability > 0 && chainKey) {
+    const { rugProbability: ownRugProbability } = scoreOwnRugProbability({
+      liquidityUsd: liq,
+      volume24hUsd: volume24h,
+      marketCapUsd: mcap,
+      riskScore: score,
+      chain: chainKey,
+    });
+    if (ownRugProbability > filters.maxOwnRugProbability) {
+      reasons.push(`Our own rug model: ${(ownRugProbability * 100).toFixed(0)}% rug probability above maximum ${(filters.maxOwnRugProbability * 100).toFixed(0)}%`);
     }
   }
 
