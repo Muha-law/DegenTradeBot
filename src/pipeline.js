@@ -14,8 +14,9 @@ import { openRealTradeIfRoom, checkRealTradeEligibility } from "./realTrading.js
 import { screenForRugPatterns } from "./ai/rugDetector.js";
 import { analyzeRugRisk } from "./ai/rugAnalyst.js";
 import { probeSellability } from "./risk/sellability.js";
+import { probeRoundTripTax } from "./risk/roundTripProbe.js";
 import { getBestPair, pairSummary } from "./risk/dexscreener.js";
-import { buildHoneypotCaughtMessage } from "./telegram/formatMessage.js";
+import { buildHoneypotCaughtMessage, buildRoundTripHoneypotCaughtMessage } from "./telegram/formatMessage.js";
 
 // For each prior same-name call, fetches its current price (best-effort) so
 // the AI screen can see whether the earlier namesake already pumped —
@@ -83,6 +84,44 @@ export async function evaluateToken(bot, { chain, dexName, pairAddress, tokenAdd
       return {
         pass: false,
         reasons: [`Selective honeypot — ${sellCheck.blocked}/${sellCheck.tested} real holders blocked from selling`],
+        riskResult,
+      };
+    }
+  }
+
+  // Second, structurally different honeypot gate — probeSellability above
+  // only catches a raw transfer() reverting for real holders; it can't see
+  // a token that lets the transfer succeed but taxes away nearly the whole
+  // sale (or blocks the sell specifically at the router/pair leg, distinct
+  // from a plain holder-to-holder transfer). This one actually executes a
+  // simulated buy-then-sell round trip through the real router via an
+  // eth_call state override, so any such mechanism applies exactly as it
+  // would on a real trade. See risk/roundTripProbe.js. Confirmed real
+  // motivation: MNEMO/Robinhood Chain — a third-party bot's own buy/sell
+  // simulation flagged 100% sell tax; our only other pre-buy check
+  // (probeSellability) would not have caught this shape of honeypot, and
+  // GoPlus doesn't cover Robinhood Chain at all. Toggle in filters.json
+  // (requireRoundTripTaxCheck).
+  if (filters.requireRoundTripTaxCheck !== false) {
+    const roundTripCheck = await probeRoundTripTax(chain, tokenAddress);
+    if (roundTripCheck.honeypot === true) {
+      if (!hasHoneypotNotification(chain.key, tokenAddress)) {
+        markHoneypotNotified(chain.key, tokenAddress);
+        await postUpdate(
+          bot,
+          buildRoundTripHoneypotCaughtMessage({
+            chain,
+            tokenAddress,
+            name,
+            symbol,
+            reason: roundTripCheck.reason,
+            roundTripLossPct: roundTripCheck.roundTripLossPct,
+          })
+        );
+      }
+      return {
+        pass: false,
+        reasons: [roundTripCheck.reason || `Simulated round trip lost ${((roundTripCheck.roundTripLossPct || 1) * 100).toFixed(0)}% of value`],
         riskResult,
       };
     }

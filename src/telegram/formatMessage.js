@@ -360,6 +360,24 @@ export function buildHoneypotCaughtMessage({ chain, tokenAddress, name, symbol, 
   ].join("\n");
 }
 
+// Distinct from buildHoneypotCaughtMessage above — that one catches a
+// revert-based (selective) block via real holders; this one catches a
+// simulated fresh buy+sell round trip coming back with (near-)nothing,
+// whether via an outright sell revert or an extreme effective tax. Different
+// mechanism (see risk/roundTripProbe.js), same outcome.
+export function buildRoundTripHoneypotCaughtMessage({ chain, tokenAddress, name, symbol, reason, roundTripLossPct }) {
+  const detail =
+    typeof roundTripLossPct === "number"
+      ? `Simulated buy+sell round trip lost ${(roundTripLossPct * 100).toFixed(0)}% of value.`
+      : reason;
+  return [
+    `🛑 *Honeypot caught and skipped* — ${escapeMd(name) || "Unknown"} (${escapeMd(symbol) || "?"}) on ${chain.label}`,
+    `${detail} Never called, no trade attempted.`,
+    "",
+    `\`${tokenAddress}\``,
+  ].join("\n");
+}
+
 // Trading is enabled per chain now, not globally — summarize which chains
 // (if any) are actually on rather than a single running/paused boolean.
 function formatChainStatusLine(settings, onEmoji, onWord, offWord) {

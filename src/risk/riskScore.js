@@ -25,6 +25,19 @@ function scoreContractSafety(sec, flags) {
     return { points: 0, fatal: true };
   }
 
+  // A token can pass is_honeypot (a boolean heuristic GoPlus itself computes)
+  // while its own reported sell_tax says a sale returns almost nothing —
+  // functionally identical to a honeypot regardless of what the boolean
+  // says. Confirmed real motivation: MNEMO/Robinhood — a third-party bot's
+  // own buy/sell simulation printed "Tax: S 100%" and flagged it as a
+  // honeypot; a sell tax at that level is a honeypot by definition, no
+  // heuristic needed.
+  const earlySellTax = Number(sec.sell_tax) || 0;
+  if (earlySellTax >= 0.5) {
+    flags.push(`🚨 Sell tax ${(earlySellTax * 100).toFixed(0)}% — effectively unsellable, treated as honeypot`);
+    return { points: 0, fatal: true };
+  }
+
   let points = WEIGHTS.contractSafety;
   const deduct = (amount, flag) => {
     points -= amount;

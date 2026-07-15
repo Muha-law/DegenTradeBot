@@ -1,7 +1,8 @@
 {
-  "minLiquidityUsd": 5000,
-  "minMarketCapUsd": 14000,
+  "minLiquidityUsd": 20000,
+  "minMarketCapUsd": 40000,
   "maxMarketCapUsd": 75000,
+  "maxLiquidityToMarketCapRatio": 0.6,
   "minVolume24hUsd": 2000,
   "maxVolume24hUsd": 15000,
   "minHolderCount": 0,

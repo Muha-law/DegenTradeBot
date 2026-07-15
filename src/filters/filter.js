@@ -6,9 +6,20 @@ import { getDataDir, seedFileIfMissing } from "../dataDir.js";
 
 const filtersPath = path.join(getDataDir(), "filters.json");
 
+// Merged over whatever's persisted — an already-provisioned Railway volume
+// has its own filters.json from before any given key existed, and
+// seedFileIfMissing only copies the bundled template onto a volume that has
+// no file at all yet, so a new key added here would otherwise silently never
+// reach a live instance without this merge.
+const DEFAULTS = {
+  requireRoundTripTaxCheck: true,
+  maxLiquidityToMarketCapRatio: 0.6,
+};
+
 export function loadFilters() {
   seedFileIfMissing("filters.json");
-  return JSON.parse(fs.readFileSync(filtersPath, "utf8"));
+  const raw = JSON.parse(fs.readFileSync(filtersPath, "utf8"));
+  return { ...DEFAULTS, ...raw };
 }
 
 export function saveFilters(filters) {
@@ -56,6 +67,10 @@ export async function checkFreshHoneypotStatus(chain, tokenAddress) {
     if (sec && isTrue(sec.is_honeypot)) {
       return { pass: false, reason: "GoPlus now flags this token as a honeypot (wasn't indexed yet at the original filter pass)" };
     }
+    const sellTax = sec ? Number(sec.sell_tax) || 0 : 0;
+    if (sellTax >= 0.5) {
+      return { pass: false, reason: `GoPlus now shows sell tax ${(sellTax * 100).toFixed(0)}% (wasn't indexed yet at the original filter pass)` };
+    }
     return { pass: true };
   } catch {
     return { pass: true };
@@ -92,6 +107,19 @@ export function applyFilter(riskResult, tokenAgeMinutes) {
     reasons.push(`Market cap $${mcap.toFixed(0)} below minimum $${filters.minMarketCapUsd}`);
   }
 
+  // Liquidity unusually high relative to market cap — backtested against
+  // the 2026-07-14 honeypot batch (5 confirmed honeypots on BSC/Robinhood
+  // Chain), where this ratio was the one numeric trait shared across all of
+  // them and absent from the confirmed-legit comparison. 0/unset = no cap.
+  if (filters.maxLiquidityToMarketCapRatio > 0 && mcap > 0) {
+    const liqToMcap = liq / mcap;
+    if (liqToMcap > filters.maxLiquidityToMarketCapRatio) {
+      reasons.push(
+        `Liquidity/market-cap ratio ${liqToMcap.toFixed(2)} above maximum ${filters.maxLiquidityToMarketCapRatio}`
+      );
+    }
+  }
+
   // Volume is evidence of real trading interest, distinct from liquidity
   // just sitting idle. 0/unset = no minimum.
   const volume24h = pair?.volume24h || 0;
@@ -119,6 +147,11 @@ export function applyFilter(riskResult, tokenAgeMinutes) {
     if (creatorPct > filters.maxCreatorHolderPercent) reasons.push(`Creator holds ${creatorPct.toFixed(0)}% (max ${filters.maxCreatorHolderPercent}%)`);
 
     if (filters.requireNotHoneypot && isTrue(security.is_honeypot)) reasons.push("Flagged as honeypot");
+    // Unconditional, unlike the boolean check above — a reported sell tax
+    // this high means a sale returns almost nothing back regardless of
+    // whether GoPlus's own is_honeypot heuristic happened to catch it.
+    const sellTax = Number(security.sell_tax) || 0;
+    if (sellTax >= 0.5) reasons.push(`Sell tax ${(sellTax * 100).toFixed(0)}% — effectively unsellable`);
     if (filters.requireOpenSource && !isTrue(security.is_open_source)) reasons.push("Contract not open source");
     if (filters.blockMintable && isTrue(security.is_mintable)) reasons.push("Token supply is mintable");
   }
