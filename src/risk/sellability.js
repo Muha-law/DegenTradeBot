@@ -75,8 +75,15 @@ export async function probeSellability(chain, tokenAddress, pairAddress) {
       tested++;
       try {
         // The first leg of any sell: move tokens into the pair contract.
-        // A honeypot's transfer hook reverts here for non-whitelisted senders.
-        await token.transfer.staticCall(pairAddress, balance / 2n, { from: buyer });
+        // A honeypot's transfer hook usually reverts here for non-whitelisted
+        // senders — but ERC20's spec also allows a non-reverting failure
+        // (transfer() returning false instead of throwing), a pattern some
+        // honeypots use specifically because it's easy for a caller to check
+        // only for a revert and miss it. staticCall resolves normally with
+        // the decoded return value in that case, so it has to be checked
+        // explicitly rather than relying on the catch block alone.
+        const success = await token.transfer.staticCall(pairAddress, balance / 2n, { from: buyer });
+        if (success === false) blocked++;
       } catch {
         blocked++;
       }

@@ -3,6 +3,7 @@ import path from "node:path";
 import { getBestPair, pairSummary } from "../risk/dexscreener.js";
 import { getTokenSecurity } from "../risk/goplus.js";
 import { getDataDir, seedFileIfMissing } from "../dataDir.js";
+import { scoreRugProbability } from "../ai/rugClassifier.js";
 
 const filtersPath = path.join(getDataDir(), "filters.json");
 
@@ -14,6 +15,8 @@ const filtersPath = path.join(getDataDir(), "filters.json");
 const DEFAULTS = {
   requireRoundTripTaxCheck: true,
   maxLiquidityToMarketCapRatio: 0.6,
+  // Off by default — see the rug-probability gate in applyFilter for why.
+  maxRugProbability: 0,
 };
 
 export function loadFilters() {
@@ -81,7 +84,9 @@ export async function checkFreshHoneypotStatus(chain, tokenAddress) {
 }
 
 // Decides whether a scored token gets "called". Returns { pass, reasons }.
-export function applyFilter(riskResult, tokenAgeMinutes) {
+// chainKey/launchSource are optional — only needed for the AI rug-probability
+// gate below; existing callers that don't pass them just skip that check.
+export function applyFilter(riskResult, tokenAgeMinutes, { chainKey, launchSource } = {}) {
   const filters = loadFilters();
   const reasons = [];
   const { security, pair, score, lpLock } = riskResult;
@@ -137,6 +142,27 @@ export function applyFilter(riskResult, tokenAgeMinutes) {
   // 0/unset = no ceiling.
   if (filters.maxVolume24hUsd > 0 && volume24h > filters.maxVolume24hUsd) {
     reasons.push(`24h volume $${volume24h.toFixed(0)} above maximum $${filters.maxVolume24hUsd}`);
+  }
+
+  // Logistic regression ported from the upstream repo this bot started
+  // from (src/ai/rugModelArtifact.json) — trained on ITS 406 closed trades,
+  // chronological held-out test AUC 0.857 on ITS data, not ours. 0/unset =
+  // gate disabled by default here for exactly that reason: it's an
+  // out-of-distribution model until validated against our own call/outcome
+  // history (different filter settings over time, different chain mix).
+  // chainKey is required for a real score; silently skips if not provided.
+  if (filters.maxRugProbability > 0 && chainKey) {
+    const { rugProbability } = scoreRugProbability({
+      liquidityUsd: liq,
+      volume24hUsd: volume24h,
+      marketCapUsd: mcap,
+      riskScore: score,
+      chain: chainKey,
+      launchSource,
+    });
+    if (rugProbability > filters.maxRugProbability) {
+      reasons.push(`AI rug model: ${(rugProbability * 100).toFixed(0)}% rug probability above maximum ${(filters.maxRugProbability * 100).toFixed(0)}%`);
+    }
   }
 
   if (security) {

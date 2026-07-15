@@ -52,7 +52,7 @@ export async function evaluateToken(bot, { chain, dexName, pairAddress, tokenAdd
   }
 
   const riskResult = await computeRiskScore(chain, tokenAddress);
-  const { pass, reasons, filters } = applyFilter(riskResult, ageMinutes);
+  const { pass, reasons, filters } = applyFilter(riskResult, ageMinutes, { chainKey: chain.key, launchSource: dexName });
 
   if (riskResult.deployerAddress) {
     recordDeployerOutcome(riskResult.deployerAddress, { lowScore: riskResult.score < 40 });
