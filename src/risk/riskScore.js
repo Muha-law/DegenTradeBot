@@ -38,6 +38,19 @@ function scoreContractSafety(sec, flags) {
     return { points: 0, fatal: true };
   }
 
+  // Owner can rewrite a holder's balance directly — a different mechanism
+  // from a transfer-block or a tax, but the same outcome: your balance can
+  // be zeroed at will regardless of what any sell simulation shows.
+  // Confirmed real motivation: this is exactly how catnip drained the
+  // wallet earlier in production — a non-standard balance-manipulation
+  // function that bypasses Transfer events entirely, so neither a block
+  // explorer nor a sell simulation ever sees it happen. GoPlus already
+  // flags this; we just weren't reading the field.
+  if (isTrue(sec.owner_change_balance)) {
+    flags.push("🚨 Owner can directly alter holder balances — score forced to 0");
+    return { points: 0, fatal: true };
+  }
+
   let points = WEIGHTS.contractSafety;
   const deduct = (amount, flag) => {
     points -= amount;
@@ -173,6 +186,40 @@ async function scoreDeployerHistory(chain, tokenAddress, flags) {
   return { points: Math.max(0, points), deployerAddress: creation.deployerAddress };
 }
 
+// Informational only — unlike everything else in this file, these aren't
+// backtested against real outcomes yet (no equivalent of the 257-pair
+// LP-lock backtest or the 420-call volume-ceiling backtest behind it), so
+// they never touch the score or gate a call. They just ride along in the
+// same flags list scoreContractSafety/scoreLiquidityLock/etc. already
+// populate, for a human to weigh. Mirrors WatchTower's own "Social Threat
+// Radar" module, built on the same DexScreener response we already fetch
+// for liquidity/mcap — no extra API call.
+function scoreSocialSignals(pair, flags) {
+  if (!pair) return;
+
+  if (pair.hasSocials === false) {
+    flags.push("No social links or website found on DexScreener");
+  }
+
+  if (pair.buys24h != null && pair.sells24h != null && pair.buys24h + pair.sells24h > 0) {
+    if (pair.sells24h > 0) {
+      const buySellRatio = pair.buys24h / pair.sells24h;
+      if (buySellRatio < 0.5) {
+        flags.push(`Heavy sell pressure (24h) — ${pair.buys24h} buys / ${pair.sells24h} sells`);
+      }
+    }
+  }
+
+  if (pair.priceChange24h != null) {
+    const ageHours = pair.createdAt ? (Date.now() - pair.createdAt) / 3600000 : Infinity;
+    if (pair.priceChange24h <= -50) {
+      flags.push(`⚠️ Price down ${pair.priceChange24h.toFixed(0)}% in 24h — possible dump already in progress`);
+    } else if (pair.priceChange24h >= 500 && ageHours < 48) {
+      flags.push(`⚠️ Price up ${pair.priceChange24h.toFixed(0)}% in 24h on a token this new — pump-and-dump risk`);
+    }
+  }
+}
+
 function gradeFor(score) {
   if (score >= 80) return { grade: "A", label: "Very Low Risk" };
   if (score >= 60) return { grade: "B", label: "Low Risk" };
@@ -222,6 +269,7 @@ export async function computeRiskScore(chain, tokenAddress) {
   const liquidityLock = scoreLiquidityLock(security, pair, lpLock, flags);
   const holderDistribution = scoreHolderDistribution(security, flags);
   const { points: deployerHistory, deployerAddress } = await scoreDeployerHistory(chain, tokenAddress, flags);
+  scoreSocialSignals(pair, flags);
 
   // A honeypot means nothing else matters — you can't sell no matter how
   // good liquidity/holders/deployer history look.

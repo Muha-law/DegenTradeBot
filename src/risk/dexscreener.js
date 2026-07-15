@@ -69,5 +69,8 @@ export function pairSummary(pair, tokenAddress) {
     dexId: pair.dexId,
     createdAt: pair.pairCreatedAt || null,
     isBaseToken,
+    hasSocials: (pair.info?.socials?.length || 0) + (pair.info?.websites?.length || 0) > 0,
+    buys24h: pair.txns?.h24?.buys ?? null,
+    sells24h: pair.txns?.h24?.sells ?? null,
   };
 }

@@ -71,6 +71,9 @@ export async function checkFreshHoneypotStatus(chain, tokenAddress) {
     if (sellTax >= 0.5) {
       return { pass: false, reason: `GoPlus now shows sell tax ${(sellTax * 100).toFixed(0)}% (wasn't indexed yet at the original filter pass)` };
     }
+    if (sec && isTrue(sec.owner_change_balance)) {
+      return { pass: false, reason: "GoPlus now shows the owner can alter holder balances (wasn't indexed yet at the original filter pass)" };
+    }
     return { pass: true };
   } catch {
     return { pass: true };
@@ -152,6 +155,10 @@ export function applyFilter(riskResult, tokenAgeMinutes) {
     // whether GoPlus's own is_honeypot heuristic happened to catch it.
     const sellTax = Number(security.sell_tax) || 0;
     if (sellTax >= 0.5) reasons.push(`Sell tax ${(sellTax * 100).toFixed(0)}% — effectively unsellable`);
+    // Same tier as the sell-tax check above — this is the exact mechanism
+    // that drained the wallet on catnip (arbitrary balance rewrite bypassing
+    // Transfer events), so it's unconditional too, not gated by a toggle.
+    if (isTrue(security.owner_change_balance)) reasons.push("Owner can directly alter holder balances");
     if (filters.requireOpenSource && !isTrue(security.is_open_source)) reasons.push("Contract not open source");
     if (filters.blockMintable && isTrue(security.is_mintable)) reasons.push("Token supply is mintable");
   }
