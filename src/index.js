@@ -9,6 +9,7 @@ import { createBot } from "./telegram/bot.js";
 import { startMilestoneChecker, startWatchlistDigest } from "./priceUpdater.js";
 import { startRecheckQueue } from "./recheckQueue.js";
 import { startTrackUpdater } from "./trackUpdater.js";
+import { startStalePriceRugCheck } from "./stalePriceRugCheck.js";
 import { startPaperTradeChecker } from "./paperTrading.js";
 import { startRealTradeChecker } from "./realTrading.js";
 import { config } from "./config.js";
@@ -135,6 +136,7 @@ startRecheckQueue(bot);
 startTrackUpdater(bot);
 startPaperTradeChecker(bot);
 startRealTradeChecker(bot);
+startStalePriceRugCheck(bot);
 
 // NFT support lives entirely behind OPENSEA_API_KEY being configured —
 // with no key, none of this starts and the rest of the bot behaves exactly

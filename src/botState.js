@@ -40,3 +40,15 @@ export function setNftNotificationsEnabled(enabled) {
   const state = readState();
   fs.writeFileSync(statePath, JSON.stringify({ ...state, nftNotificationsEnabled: enabled }, null, 2));
 }
+
+// One-shot flag for stalePriceRugCheck.js — once the post-filter-change
+// sample is big enough to report on, it should report exactly once, not
+// re-send every 6h forever afterward.
+export function hasStalePriceReportBeenSent() {
+  return Boolean(readState().stalePriceReportSent);
+}
+
+export function markStalePriceReportSent() {
+  const state = readState();
+  fs.writeFileSync(statePath, JSON.stringify({ ...state, stalePriceReportSent: true }, null, 2));
+}
