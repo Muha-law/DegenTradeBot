@@ -67,7 +67,14 @@ const ABSOLUTE_MAX_USD_PER_TRADE = 50;
 // still bounded against a fat-finger (typing 1 instead of 0.01, etc.).
 const ABSOLUTE_MAX_NATIVE_PER_MANUAL_TRADE = 0.05;
 
-const DEADLINE_SECONDS = 120;
+// A generous buffer, not a tight one: on Arbitrum-Orbit-based L2s (Robinhood
+// Chain's base), the EVM's block.timestamp opcode can diverge from the RPC's
+// own reported block-header timestamp — a known category of quirk on this
+// chain family. A tight deadline risks a swap reverting as "expired" even
+// though it was still comfortably within time by every wall-clock/RPC
+// measure available. 600s comfortably absorbs that plus the extra round
+// trip sendWithGasPadding's estimateGas call adds before broadcast.
+const DEADLINE_SECONDS = 600;
 
 // A HOODBOT-style buy reverted on-chain because the price moved between
 // quoting and the transaction actually landing — the estimate-gas step
@@ -118,6 +125,22 @@ export async function withSlippageRetry(attempt, configuredBps) {
     }
   }
   throw lastErr;
+}
+
+// Ethers' automatic gas estimation is a point-in-time snapshot. On a fast-
+// moving token, a swap can cost more gas by the time it's actually included
+// than it did at estimation a few seconds earlier (e.g. crossing more
+// concentrated-liquidity ticks on a V3 swap) — the failure signature is an
+// out-of-gas revert having consumed ~95%+ of an unpadded limit, distinct
+// from a slippage/logic revert. Padding costs nothing unless it's actually
+// used — gas is only ever charged for what's actually consumed, never for
+// the unused portion of the limit.
+const GAS_LIMIT_PADDING_BPS = 3000; // +30%
+
+async function sendWithGasPadding(contractMethod, args, overrides = {}) {
+  const estimated = await contractMethod.estimateGas(...args, overrides);
+  const padded = (estimated * BigInt(10000 + GAS_LIMIT_PADDING_BPS)) / 10000n;
+  return contractMethod(...args, { ...overrides, gasLimit: padded });
 }
 
 function requireWallet(chain) {
@@ -279,16 +302,19 @@ async function executeBuy(chain, tokenAddress, nativeAmount, nativeUsdPrice, sli
     assertQuoteIsSane({ expectedOutRaw, decimals, nativeAmount, nativeUsdPrice, pair });
     const minOut = (expectedOutRaw * BigInt(10000 - slippageBps)) / 10000n;
 
-    const tx = await router.exactInputSingle(
-      {
-        tokenIn: chain.wrappedNative,
-        tokenOut: tokenAddress,
-        fee: v3Pool.fee,
-        recipient: wallet.address,
-        amountIn: nativeAmountWei,
-        amountOutMinimum: minOut,
-        sqrtPriceLimitX96: 0,
-      },
+    const tx = await sendWithGasPadding(
+      router.exactInputSingle,
+      [
+        {
+          tokenIn: chain.wrappedNative,
+          tokenOut: tokenAddress,
+          fee: v3Pool.fee,
+          recipient: wallet.address,
+          amountIn: nativeAmountWei,
+          amountOutMinimum: minOut,
+          sqrtPriceLimitX96: 0,
+        },
+      ],
       { value: nativeAmountWei }
     );
     receipt = await tx.wait();
@@ -306,11 +332,9 @@ async function executeBuy(chain, tokenAddress, nativeAmount, nativeUsdPrice, sli
     assertQuoteIsSane({ expectedOutRaw: expectedOut, decimals, nativeAmount, nativeUsdPrice, pair });
     const minOut = (expectedOut * BigInt(10000 - slippageBps)) / 10000n;
 
-    const tx = await router.swapExactETHForTokensSupportingFeeOnTransferTokens(
-      minOut,
-      path,
-      wallet.address,
-      Math.floor(Date.now() / 1000) + DEADLINE_SECONDS,
+    const tx = await sendWithGasPadding(
+      router.swapExactETHForTokensSupportingFeeOnTransferTokens,
+      [minOut, path, wallet.address, Math.floor(Date.now() / 1000) + DEADLINE_SECONDS],
       { value: nativeAmountWei }
     );
     receipt = await tx.wait();
@@ -399,7 +423,7 @@ export async function sellToken(chain, tokenAddress, tokenAmountRaw, slippageBps
 
     const allowance = await token.allowance(wallet.address, chain.v3RouterAddress);
     if (allowance < amountIn) {
-      const approveTx = await token.approve(chain.v3RouterAddress, MaxUint256);
+      const approveTx = await sendWithGasPadding(token.approve, [chain.v3RouterAddress, MaxUint256]);
       const approveReceipt = await approveTx.wait();
       if (approveReceipt.status !== 1) throw new Error(`Approve transaction reverted: ${approveReceipt.hash}`);
       totalGasWei += approveReceipt.gasUsed * approveReceipt.gasPrice;
@@ -428,15 +452,17 @@ export async function sellToken(chain, tokenAddress, tokenAmountRaw, slippageBps
     // exactInputSingle delivers WETH (not native ETH) to recipient — unwrap
     // it ourselves via WETH9's withdraw() right after.
     const wethBalBefore = await weth.balanceOf(wallet.address);
-    const swapTx = await router.exactInputSingle({
-      tokenIn: tokenAddress,
-      tokenOut: chain.wrappedNative,
-      fee: v3Pool.fee,
-      recipient: wallet.address,
-      amountIn,
-      amountOutMinimum: minOut,
-      sqrtPriceLimitX96: 0,
-    });
+    const swapTx = await sendWithGasPadding(router.exactInputSingle, [
+      {
+        tokenIn: tokenAddress,
+        tokenOut: chain.wrappedNative,
+        fee: v3Pool.fee,
+        recipient: wallet.address,
+        amountIn,
+        amountOutMinimum: minOut,
+        sqrtPriceLimitX96: 0,
+      },
+    ]);
     const swapReceipt = await swapTx.wait();
     if (swapReceipt.status !== 1) throw new Error(`Sell transaction reverted: ${swapReceipt.hash}`);
     totalGasWei += swapReceipt.gasUsed * swapReceipt.gasPrice;
@@ -450,7 +476,7 @@ export async function sellToken(chain, tokenAddress, tokenAmountRaw, slippageBps
       );
     }
 
-    const unwrapTx = await weth.withdraw(wethReceived);
+    const unwrapTx = await sendWithGasPadding(weth.withdraw, [wethReceived]);
     const unwrapReceipt = await unwrapTx.wait();
     if (unwrapReceipt.status !== 1) throw new Error(`WETH unwrap reverted: ${unwrapReceipt.hash}`);
     totalGasWei += unwrapReceipt.gasUsed * unwrapReceipt.gasPrice;
@@ -462,7 +488,7 @@ export async function sellToken(chain, tokenAddress, tokenAmountRaw, slippageBps
 
     const allowance = await token.allowance(wallet.address, chain.routerAddress);
     if (allowance < amountIn) {
-      const approveTx = await token.approve(chain.routerAddress, MaxUint256);
+      const approveTx = await sendWithGasPadding(token.approve, [chain.routerAddress, MaxUint256]);
       const approveReceipt = await approveTx.wait();
       if (approveReceipt.status !== 1) throw new Error(`Approve transaction reverted: ${approveReceipt.hash}`);
       totalGasWei += approveReceipt.gasUsed * approveReceipt.gasPrice;
@@ -474,13 +500,13 @@ export async function sellToken(chain, tokenAddress, tokenAmountRaw, slippageBps
 
     const nativeBalBefore = await wallet.provider.getBalance(wallet.address);
 
-    const tx = await router.swapExactTokensForETHSupportingFeeOnTransferTokens(
+    const tx = await sendWithGasPadding(router.swapExactTokensForETHSupportingFeeOnTransferTokens, [
       amountIn,
       minOut,
       path,
       wallet.address,
-      Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
-    );
+      Math.floor(Date.now() / 1000) + DEADLINE_SECONDS,
+    ]);
     const receipt = await tx.wait();
     if (receipt.status !== 1) throw new Error(`Sell transaction reverted: ${receipt.hash}`);
     totalGasWei += receipt.gasUsed * receipt.gasPrice;

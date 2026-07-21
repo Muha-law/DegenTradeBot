@@ -20,7 +20,7 @@ import { postUpdate, postTradeCard } from "./telegram/bot.js";
 import { buildPaperTradeOpenMessage, buildPaperTradeCloseMessage, buildComandoActivatedMessage } from "./telegram/formatMessage.js";
 import { renderOpenCard, renderCloseCard } from "./telegram/tradeCard.js";
 
-const CHECK_CRON = "*/2 * * * *";
+const CHECK_CRON = "*/10 * * * * *"; // every 10s (6-field cron — includes seconds)
 // How often, per trade, Super Comando is allowed to spend an AI call asking
 // "sell now or keep holding" — the floor-breach rule below runs every 2m
 // regardless and is what actually protects the position; this throttle just

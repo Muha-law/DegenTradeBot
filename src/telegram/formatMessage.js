@@ -267,15 +267,29 @@ export function buildPaperTradeCloseMessage({ chain, tokenAddress, name, symbol,
 // Sent when a trade crosses its take-profit target with Super Comando on —
 // instead of the usual take-profit close, it's being let ride for a bigger
 // gain, protected by a floor at the level it would otherwise have sold at.
-export function buildComandoActivatedMessage({ chain, tokenAddress, name, symbol, pnlPct, floorPct }) {
-  return [
+// principalRecoveredUsd/realizedPnlUsd/txHash are only present on a REAL
+// trade (paper trading has no capital to actually bank) — a real partial
+// sell recovers the original position_size_usd for real, so the message
+// should say so distinctly from the paper-trading "still fully at risk"
+// version.
+export function buildComandoActivatedMessage({ chain, tokenAddress, name, symbol, pnlPct, floorPct, principalRecoveredUsd, realizedPnlUsd, txHash }) {
+  const explorer = txHash ? txExplorerUrls[chain.key]?.(txHash) : null;
+  const lines = [
     `🪖 *SUPER COMANDO activated* — letting it ride`,
     `${escapeMd(name) || "Unknown"} (${escapeMd(symbol) || "?"}) on ${chain.label}`,
     `Hit +${pnlPct.toFixed(1)}% — instead of taking profit, holding for more.`,
-    `Protected floor: +${floorPct.toFixed(1)}% (auto-sells if it drops below this)`,
-    "",
-    `\`${tokenAddress}\``,
-  ].join("\n");
+  ];
+  if (principalRecoveredUsd != null) {
+    lines.push(
+      `Sold enough to bank $${principalRecoveredUsd.toFixed(2)} (your original capital back, for real) — realized profit so far: $${realizedPnlUsd.toFixed(2)}`,
+      `The rest rides with zero further risk to capital already recovered.`
+    );
+  } else {
+    lines.push(`Protected floor: +${floorPct.toFixed(1)}% (auto-sells if it drops below this)`);
+  }
+  lines.push("", `\`${tokenAddress}\``);
+  if (txHash) lines.push(explorer ? `[Recovery tx](${explorer})` : `Recovery tx: \`${txHash}\``);
+  return lines.join("\n");
 }
 
 const txExplorerUrls = {

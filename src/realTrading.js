@@ -34,7 +34,7 @@ import {
 } from "./telegram/formatMessage.js";
 import { renderOpenCard, renderCloseCard } from "./telegram/tradeCard.js";
 
-const CHECK_CRON = "*/2 * * * *";
+const CHECK_CRON = "*/10 * * * * *"; // every 10s (6-field cron — includes seconds)
 // Same throttle rationale as paper trading's Super Comando — see paperTrading.js.
 const COMANDO_AI_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -547,11 +547,66 @@ export function startRealTradeChecker(bot) {
               }
             }
           } else if (comandoEnabled && pnlPct >= t.take_profit_pct && qualifiesForComando(t, settings)) {
-            activateRealComandoMode(t.id, { peakPct: pnlPct });
-            await postAdminUpdate(
-              bot,
-              buildComandoActivatedMessage({ chain, tokenAddress: t.token_address, name: t.name, symbol: t.symbol, pnlPct, floorPct: t.take_profit_pct })
-            );
+            // Sell exactly enough tokens to recover the original
+            // position_size_usd at today's price, then let the rest ride
+            // with zero further risk to capital already banked — the "sell
+            // your initial, free-roll the rest" move, done for real instead
+            // of just tracked in a floor. Previously this branch only
+            // flipped a tracked flag — the ENTIRE position stayed at risk
+            // the whole time Comando was "active," so a rug after a pump
+            // wiped out the full position instead of just the profit
+            // portion. Ported from the upstream repo this bot started from.
+            //
+            // remainingCostBasisUsd = position_size_usd * r/(1+r) where
+            // r=pnlPct/100 is both the correct shrunk position size AND
+            // (since soldValueUsd is fixed at position_size_usd) the
+            // realized profit from this sale — same original entry_price_usd
+            // is kept untouched so the floor check above still means "the
+            // original +take_profit_pct% level," not a rebased one.
+            try {
+              const r = pnlPct / 100;
+              const remainingCostBasisUsd = (t.position_size_usd * r) / (1 + r);
+              const costBasisSoldUsd = t.position_size_usd - remainingCostBasisUsd;
+
+              // Stays in raw integer (BigInt) space throughout rather than
+              // detouring through human-decimal units — avoids an extra
+              // on-chain decimals() call and the float-precision loss of
+              // converting to and back from human units for the same result.
+              const totalRaw = BigInt(t.token_amount_raw);
+              const soldFraction = 1 / (1 + r);
+              const FRACTION_SCALE = 1_000_000_000n;
+              let sellRaw = (totalRaw * BigInt(Math.round(soldFraction * 1_000_000_000))) / FRACTION_SCALE;
+              if (sellRaw >= totalRaw) sellRaw = totalRaw - 1n; // always leave a runner
+              if (sellRaw <= 0n) throw new Error("Computed sell amount was zero or negative");
+
+              const sellResult = await sellToken(chain, t.token_address, sellRaw.toString(), settings.slippageBps);
+              const realizedPnlUsd = sellResult.proceedsUsd - costBasisSoldUsd - t.entry_gas_usd - sellResult.gasUsd;
+              const remainingRaw = (totalRaw - sellRaw).toString();
+
+              reduceRealTrade(t.id, { tokenAmountRaw: remainingRaw, positionSizeUsd: remainingCostBasisUsd });
+              activateRealComandoMode(t.id, { peakPct: pnlPct });
+              await postAdminUpdate(
+                bot,
+                buildComandoActivatedMessage({
+                  chain,
+                  tokenAddress: t.token_address,
+                  name: t.name,
+                  symbol: t.symbol,
+                  pnlPct,
+                  floorPct: t.take_profit_pct,
+                  principalRecoveredUsd: sellResult.proceedsUsd,
+                  realizedPnlUsd,
+                  txHash: sellResult.txHash,
+                })
+              );
+            } catch (err) {
+              // Couldn't take the principal off the table for real — safer
+              // to just fully exit at take-profit than to hold the entire
+              // position through an untested floor with zero capital
+              // protection.
+              console.error(`[realTrading] Comando principal-recovery sell FAILED for ${t.symbol} (${t.chain}), falling back to full exit:`, err.message);
+              exitReason = "take_profit";
+            }
           } else if (pnlPct >= t.take_profit_pct) {
             exitReason = "take_profit";
           } else if (pnlPct <= t.stop_loss_pct) {
