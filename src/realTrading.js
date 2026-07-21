@@ -684,6 +684,6 @@ export function startRealTradeChecker(bot) {
     }
   });
 
-  console.log(`[realTrading] position checker scheduled every 2m`);
+  console.log(`[realTrading] position checker scheduled every 10s`);
   return task;
 }

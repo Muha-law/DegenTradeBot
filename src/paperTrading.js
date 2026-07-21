@@ -283,6 +283,6 @@ export function startPaperTradeChecker(bot) {
     }
   });
 
-  console.log(`[paperTrading] position checker scheduled every 2m`);
+  console.log(`[paperTrading] position checker scheduled every 10s`);
   return task;
 }
