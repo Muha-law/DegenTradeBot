@@ -38,6 +38,51 @@ const MAX_BUYERS_TO_SCAN = 60; // cap balanceOf calls — most recent buyers hav
 const MAX_BLOCKED_FRACTION = 0.5;
 const MIN_HOLDERS_FOR_VERDICT = 3; // below this, too little signal to judge either way
 
+// Some RPCs cap eth_getLogs to a much smaller range than BUYER_LOOKBACK_BLOCKS
+// in one request — confirmed live on Stable chain, which enforces a 500-block
+// max and errors with "maximum [from, to] blocks distance: 500" otherwise
+// (that chain also produces blocks roughly every 0.5s, so 500 blocks is still
+// a meaningful few minutes of real activity, not an unreasonably short probe
+// window). Tries the full range in one shot first — fast path for every
+// chain that doesn't need this — and only falls back to chunking on exactly
+// that failure mode, stopping as soon as enough buyer candidates are found
+// rather than exhaustively scanning the whole lookback window every time.
+const CHUNKED_FALLBACK_RANGE = 500;
+
+async function getBuyerTransferLogs(provider, tokenAddress, pairAddress, transferTopic, fromBlock, currentBlock) {
+  try {
+    return await provider.getLogs({
+      address: tokenAddress,
+      topics: [transferTopic, zeroPadValue(pairAddress, 32)],
+      fromBlock,
+      toBlock: currentBlock,
+    });
+  } catch (err) {
+    if (!/blocks? distance/i.test(err.message) && !/block range/i.test(err.message)) throw err;
+  }
+
+  // Caller expects ascending chronological order (same as a single
+  // getLogs call would return) and reverses it themselves to prioritize
+  // recent buyers — scanning newest-chunk-first here just bounds how much
+  // has to be fetched before there's enough to work with, not the final
+  // order, so everything gets sorted back into place before returning.
+  const logs = [];
+  let chunkEnd = currentBlock;
+  while (chunkEnd >= fromBlock && logs.length < MAX_BUYERS_TO_SCAN) {
+    const chunkStart = Math.max(fromBlock, chunkEnd - CHUNKED_FALLBACK_RANGE + 1);
+    const chunkLogs = await provider.getLogs({
+      address: tokenAddress,
+      topics: [transferTopic, zeroPadValue(pairAddress, 32)],
+      fromBlock: chunkStart,
+      toBlock: chunkEnd,
+    });
+    logs.push(...chunkLogs);
+    chunkEnd = chunkStart - 1;
+  }
+  logs.sort((a, b) => a.blockNumber - b.blockNumber || a.index - b.index);
+  return logs;
+}
+
 // Returns:
 //   { tested, blocked, blockedFraction, honeypot: true|false }  — a real verdict
 //   { tested, honeypot: null, reason }                          — not enough data / lookup failed
@@ -51,12 +96,14 @@ export async function probeSellability(chain, tokenAddress, pairAddress) {
     const currentBlock = await provider.getBlockNumber();
 
     // Transfers FROM the pair = tokens leaving the pool into a buyer's wallet.
-    const logs = await provider.getLogs({
-      address: tokenAddress,
-      topics: [iface.getEvent("Transfer").topicHash, zeroPadValue(pairAddress, 32)],
-      fromBlock: Math.max(0, currentBlock - BUYER_LOOKBACK_BLOCKS),
-      toBlock: currentBlock,
-    });
+    const logs = await getBuyerTransferLogs(
+      provider,
+      tokenAddress,
+      pairAddress,
+      iface.getEvent("Transfer").topicHash,
+      Math.max(0, currentBlock - BUYER_LOOKBACK_BLOCKS),
+      currentBlock
+    );
     if (logs.length === 0) return { tested: 0, honeypot: null, reason: "No buyers found to probe" };
 
     // Most recent buyers first — they're likeliest to still hold a balance.

@@ -203,13 +203,22 @@ async function currentNativeUsdPrice(chain, tokenAddress) {
 // into a clean, expected skip instead of an on-chain revert on every
 // attempt. The AMM factory is always the first entry in a chain's factories
 // list (see chains.js) — Noxa's own launch factory, listed after it,
-// doesn't expose getPair().
+// doesn't expose getPair(), and neither does Stable chain's (its router and
+// factory are the same contract, confirmed live, but that contract doesn't
+// implement a standard getPair()/factory() getter at all). A revert here
+// means "this check is inconclusive on this chain," not "no pair exists" —
+// treated the same as no factory info at all, since the actual swap attempt
+// right after this is the real, final arbiter either way.
 async function hasRealPair(chain, tokenAddress) {
   const factoryAddress = chain.factories?.[0]?.address;
   if (!factoryAddress) return true; // no factory info to check against — don't block on an unknown
-  const factory = new Contract(factoryAddress, FACTORY_ABI, getWalletForChain(chain)?.provider);
-  const pairAddress = await factory.getPair(tokenAddress, chain.wrappedNative);
-  return pairAddress !== "0x0000000000000000000000000000000000000000";
+  try {
+    const factory = new Contract(factoryAddress, FACTORY_ABI, getWalletForChain(chain)?.provider);
+    const pairAddress = await factory.getPair(tokenAddress, chain.wrappedNative);
+    return pairAddress !== "0x0000000000000000000000000000000000000000";
+  } catch {
+    return true;
+  }
 }
 
 // DexScreener flags Uniswap V3 pairs via `labels: ["v3"]` — a completely

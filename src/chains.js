@@ -21,6 +21,18 @@ const pancakeV2Factory = (address) => ({
   parse: (args) => [args[0], args[1], args[2]],
 });
 
+// Standard PairCreated shape (confirmed live: decoded the exact event topics
+// from a real pair's creation tx on Stable chain) — same ABI as the others
+// above, just labeled for its actual DEX rather than generically as
+// "uniswap-v2", since dexName feeds into launch-source tracking/labeling.
+const dyorswapFactory = (address) => ({
+  dexName: "dyorswap",
+  address,
+  abi: ["event PairCreated(address indexed token0, address indexed token1, address pair, uint256)"],
+  event: "PairCreated",
+  parse: (args) => [args[0], args[1], args[2]],
+});
+
 const aerodromeFactory = (address) => ({
   dexName: "aerodrome",
   address,
@@ -154,5 +166,42 @@ export const CHAINS = {
     // risk/explorer.js's Etherscan-then-Blockscout fallback.
     blockscoutBaseUrl: "https://robinhoodchain.blockscout.com",
     dexscreenerChainId: "robinhood",
+  },
+  stable: {
+    label: "Stable",
+    // No confirmed WSS endpoint for this chain yet — poll over HTTP rather
+    // than assume eth_subscribe compatibility (same caution as Robinhood
+    // Chain, where that assumption was wrong).
+    pollingOnly: true,
+    httpRpcUrl: "https://rpc.stable.xyz",
+    // The chain's own native gas token is USDT0 itself (not a separate
+    // volatile asset) — MetaMask/wallet UIs show it as "gUSDT". Paying gas
+    // in a stablecoin is the entire point of this chain.
+    nativeSymbol: "USDT0",
+    factories: [dyorswapFactory("0xDFEf2F90F7E52609cC89b80b68Ff6a1C86C4ddc4")],
+    // "Wrapped gUSDT" — confirmed two independent ways: it's DexScreener's
+    // reported quote token for a real dyorswap pair, and it's also what the
+    // router itself returns from WETH() (same address both ways).
+    wrappedNative: "0x817997Ca8394E26CCE3dE3A076a4889b27DbF9dE",
+    // Router and factory are the same contract — confirmed via WETH()
+    // matching the wrappedNative address above, and via 530+ unique callers
+    // / 1000+ transactions (the other PairCreated-emitting candidate found
+    // during verification had only 6 txs from 2 callers — an unrelated,
+    // essentially unused contract, not the real factory). This contract's
+    // own getPair()/factory() getters revert though — swapExecutor.js's
+    // hasRealPair() is written to tolerate that rather than assume "no pair
+    // exists" from an unsupported call.
+    routerAddress: "0xDFEf2F90F7E52609cC89b80b68Ff6a1C86C4ddc4",
+    // Not onboarded — confirmed via a direct API call returning code 2022
+    // "The main chain is not supported". Same fallback posture as Robinhood
+    // Chain: contract-safety/holder/LP-lock scoring runs on the self-hosted
+    // checks (roundTripProbe, probeSellability, dangerousFunctions, on-chain
+    // LP-lock) instead.
+    goplusChainId: "988",
+    // Unlike Robinhood Chain, Etherscan V2 already covers this chain
+    // directly (confirmed live with our real API key) — no Blockscout-style
+    // fallback needed for deployer history.
+    etherscanChainId: 988,
+    dexscreenerChainId: "stable",
   },
 };
