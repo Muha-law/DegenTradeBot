@@ -3,6 +3,7 @@ import { getBestPair, pairSummary } from "./dexscreener.js";
 import { getContractCreator, getDeployerTxCount } from "./explorer.js";
 import { getDeployerHistory } from "../store/db.js";
 import { checkLpLock } from "./lpLock.js";
+import { detectDangerousFunctions } from "./dangerousFunctions.js";
 
 const WEIGHTS = {
   contractSafety: 35,
@@ -271,9 +272,29 @@ export async function computeRiskScore(chain, tokenAddress) {
   const { points: deployerHistory, deployerAddress } = await scoreDeployerHistory(chain, tokenAddress, flags);
   scoreSocialSignals(pair, flags);
 
+  // Self-hosted, chain-independent (works regardless of GoPlus coverage) —
+  // see dangerousFunctions.js. Confiscation-tier functions have no
+  // legitimate reason to exist in a token contract, so a match is fatal
+  // the same way is_honeypot is, independent of whether it's ever misfired
+  // in testing — the absence of a hit so far reflects the small validation
+  // sample, not the rule being wrong. Switch-tier (blacklist/trading-toggle)
+  // is common enough in benign anti-snipe launches that it stays
+  // informational only, same as the social signals above.
+  const dangerousFunctions = await detectDangerousFunctions(chain, tokenAddress).catch((err) => {
+    console.error(`[riskScore] dangerous-function check failed for ${tokenAddress}:`, err.message);
+    return { confiscationFunctions: [], switchFunctions: [] };
+  });
+  if (dangerousFunctions.confiscationFunctions.length > 0) {
+    flags.push(`🚨 Contract exposes an arbitrary balance-manipulation function (${dangerousFunctions.confiscationFunctions.join(", ")}) — score forced to 0`);
+  }
+  if (dangerousFunctions.switchFunctions.length > 0) {
+    flags.push(`⚠️ Contract has a trading-restriction switch (${dangerousFunctions.switchFunctions.join(", ")}) — can be flipped after launch`);
+  }
+
   // A honeypot means nothing else matters — you can't sell no matter how
   // good liquidity/holders/deployer history look.
-  const total = fatal ? 0 : Math.round(contractSafety + liquidityLock + holderDistribution + deployerHistory);
+  const fatalOverall = fatal || dangerousFunctions.confiscationFunctions.length > 0;
+  const total = fatalOverall ? 0 : Math.round(contractSafety + liquidityLock + holderDistribution + deployerHistory);
   const { grade, label } = gradeFor(total);
 
   return {
@@ -287,6 +308,7 @@ export async function computeRiskScore(chain, tokenAddress) {
       deployerHistory: Math.round(deployerHistory),
     },
     flags,
+    dangerousFunctions,
     name,
     symbol,
     security,

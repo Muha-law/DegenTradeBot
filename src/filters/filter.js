@@ -190,6 +190,15 @@ export function applyFilter(riskResult, tokenAgeMinutes, { chainKey, launchSourc
     }
   }
 
+  // Unconditional and chain-independent (works with or without GoPlus
+  // coverage) — see dangerousFunctions.js. No legitimate token needs a
+  // function that can move tokens out of an arbitrary holder's balance;
+  // presence alone is the same tier as the sell-tax/owner_change_balance
+  // checks above.
+  if (riskResult.dangerousFunctions?.confiscationFunctions?.length > 0) {
+    reasons.push(`Contract exposes an arbitrary balance-manipulation function: ${riskResult.dangerousFunctions.confiscationFunctions.join(", ")}`);
+  }
+
   if (security) {
     const holderCount = Number(security.holder_count) || 0;
     if (holderCount < filters.minHolderCount) reasons.push(`Holder count ${holderCount} below minimum ${filters.minHolderCount}`);
