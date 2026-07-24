@@ -96,6 +96,15 @@ export const CHAINS = {
   bsc: {
     label: "BNB Chain",
     wssEnvVar: "BSC_WSS_RPC",
+    // Confirmed live: the WSS subscription was dropping (code 1006) roughly
+    // every 2 minutes overnight on 2026-07-23/24 — 228 disconnects across
+    // 8.2 hours — while Robinhood Chain's polling watcher kept working the
+    // entire time. That's not occasional flakiness, it's effectively no
+    // real-time coverage on this chain at all; zero new-pair detections on
+    // BSC that whole window is what actually surfaced this. Switching to
+    // the same polling approach already proven reliable for Robinhood Chain
+    // rather than continuing to chase a WS connection this unstable.
+    pollingOnly: true,
     nativeSymbol: "BNB",
     factories: [pancakeV2Factory("0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73")],
     wrappedNative: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c", // WBNB

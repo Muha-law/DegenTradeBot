@@ -9,7 +9,7 @@ import { loadWalletPrivateKey } from "./walletSettings.js";
 // than requiring separate config.
 const providerCache = new Map();
 
-function httpUrlFor(chain) {
+export function httpUrlFor(chain) {
   if (chain.httpRpcUrl) return chain.httpRpcUrl;
   const wss = process.env[chain.wssEnvVar];
   if (!wss) throw new Error(`No RPC configured for ${chain.key} (${chain.wssEnvVar})`);

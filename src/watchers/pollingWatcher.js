@@ -1,5 +1,6 @@
 import { ethers } from "ethers";
 import { hasSeenPair, markPairSeen } from "../store/db.js";
+import { httpUrlFor } from "../wallet.js";
 
 const POLL_INTERVAL_MS = 5000;
 const MAX_BLOCK_RANGE = 1000; // per-request cap; also how far a single cycle catches up if behind
@@ -36,7 +37,11 @@ function decode(factory, log, iface) {
 // unprocessed range then grew every cycle until even more requests failed.
 export function startPollingWatcher(chain, onNewToken) {
   let stopped = false;
-  const provider = new ethers.JsonRpcProvider(chain.httpRpcUrl);
+  // httpUrlFor falls back to deriving an HTTP endpoint from wssEnvVar when
+  // a chain has no explicit httpRpcUrl (e.g. BSC) — same resolution wallet.js
+  // already uses for real trading, reused here rather than requiring a
+  // second, separate RPC config for a chain that only needs one.
+  const provider = new ethers.JsonRpcProvider(httpUrlFor(chain));
 
   function handleLog(factory, iface, log) {
     try {
