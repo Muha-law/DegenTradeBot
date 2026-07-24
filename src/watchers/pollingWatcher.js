@@ -92,6 +92,19 @@ export function startPollingWatcher(chain, onNewToken) {
       }
     } catch (err) {
       console.error(`[${chain.key}/${state.factory.dexName}] poll failed:`, err.message);
+      // Some free-tier RPCs (confirmed on BSC's public endpoint) reject
+      // eth_getLogs for any range older than roughly their last minute of
+      // blocks, calling it an "archive request." Without this, a doomed
+      // historical range (e.g. the startup backfill) retries identically
+      // forever every cycle, permanently stalling detection at zero instead
+      // of just losing that one backfill window.
+      if (/archive|personal token/i.test(err.message)) {
+        try {
+          state.lastBlock = await provider.getBlockNumber();
+        } catch {
+          // leave lastBlock as-is; next cycle will retry from here
+        }
+      }
     } finally {
       if (!stopped) state.timer = setTimeout(() => pollOne(state), POLL_INTERVAL_MS);
     }
