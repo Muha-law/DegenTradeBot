@@ -61,6 +61,14 @@ const MIN_HOLDERS_FOR_VERDICT = 3; // below this, too little signal to judge eit
 const CHUNKED_FALLBACK_RANGE = 500;
 const MIN_CHUNK_RANGE = 25; // floor for the shrink — some free nodes only serve ~50 recent blocks of logs
 const MAX_CHUNK_REQUESTS = 40; // bound total getLogs calls so a tiny window can't fan out unbounded (rate limits)
+// Wall-clock ceiling on the whole chunked scan. probeSellability runs inline
+// in the call pipeline (evaluateToken), so its latency directly delays a
+// call/buy — and on a chain where every window has to be fetched in small
+// chunks, a quiet token with sparse recent buys could otherwise spend 20s+
+// walking empty windows. An active token (the case that matters) hits the
+// buyer cap in a chunk or two well under this; the bound just stops a slow
+// token from stalling the pipeline, degrading to "unknown" (safe) instead.
+const MAX_SCAN_MS = 8000;
 
 function isRangeLimitError(err) {
   return /blocks? distance|block range|archive|personal token|response size|result set too large|limit exceeded/i.test(err?.message || "");
@@ -70,8 +78,16 @@ async function getBuyerTransferLogs(provider, tokenAddress, pairAddress, transfe
   const topics = [transferTopic, zeroPadValue(pairAddress, 32)];
   try {
     return await provider.getLogs({ address: tokenAddress, topics, fromBlock, toBlock: currentBlock });
-  } catch (err) {
-    if (!isRangeLimitError(err)) throw err;
+  } catch {
+    // ANY single-shot failure falls through to the bounded, newest-first
+    // chunked scan below — it's strictly a better recovery than giving up
+    // (never throws; returns whatever it can). RPCs signal an over-wide range
+    // inconsistently: a hard cap message (Stable), an archive restriction
+    // (BSC's free node), or just a generic -32000 "internal server error"
+    // (Robinhood Chain returns exactly this for the 50k range) — matching on
+    // the message text alone missed Robinhood entirely and left the probe
+    // disabled there. isRangeLimitError is still used *inside* the loop to
+    // decide shrink-vs-give-up per chunk, where the distinction does matter.
   }
 
   // Caller expects ascending chronological order (same as a single getLogs
@@ -83,7 +99,8 @@ async function getBuyerTransferLogs(provider, tokenAddress, pairAddress, transfe
   let chunkEnd = currentBlock;
   let chunkSize = CHUNKED_FALLBACK_RANGE;
   let requests = 0;
-  while (chunkEnd >= fromBlock && logs.length < MAX_BUYERS_TO_SCAN && requests < MAX_CHUNK_REQUESTS) {
+  const deadline = Date.now() + MAX_SCAN_MS;
+  while (chunkEnd >= fromBlock && logs.length < MAX_BUYERS_TO_SCAN && requests < MAX_CHUNK_REQUESTS && Date.now() < deadline) {
     const chunkStart = Math.max(fromBlock, chunkEnd - chunkSize + 1);
     requests++;
     try {
