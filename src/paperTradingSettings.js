@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getDataDir } from "./dataDir.js";
 import { getActiveChainDefs } from "./chainSettings.js";
+import { sanitizeTradingSettings } from "./settingsSanitize.js";
 
 const settingsPath = path.join(getDataDir(), "paperTradingSettings.json");
 
@@ -38,7 +39,9 @@ export function loadPaperTradingSettings() {
     merged.enabledChains = raw.enabled !== false ? getActiveChainDefs().map((c) => c.key) : [];
   }
   delete merged.enabled;
-  return merged;
+  // Paper money, but the same corrupt-value class would quietly poison the
+  // strategy-validation signal the real config is judged against.
+  return sanitizeTradingSettings(merged, STATIC_DEFAULTS, "paperTradingSettings");
 }
 
 export function savePaperTradingSettings(settings) {

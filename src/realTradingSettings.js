@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getDataDir } from "./dataDir.js";
 import { getActiveChainDefs } from "./chainSettings.js";
+import { sanitizeTradingSettings } from "./settingsSanitize.js";
 
 const settingsPath = path.join(getDataDir(), "realTradingSettings.json");
 
@@ -67,7 +68,9 @@ export function loadRealTradingSettings() {
     merged.enabledChains = raw.enabled ? getActiveChainDefs().map((c) => c.key) : [];
   }
   delete merged.enabled;
-  return merged;
+  // Backstop against a corrupt/nonsensical persisted value reaching the live
+  // trade loop — real money rode on stopLossPct: 0 slipping through here once.
+  return sanitizeTradingSettings(merged, DEFAULTS, "realTradingSettings");
 }
 
 export function saveRealTradingSettings(settings) {
