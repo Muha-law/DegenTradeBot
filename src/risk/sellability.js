@@ -39,45 +39,67 @@ const MAX_BLOCKED_FRACTION = 0.5;
 const MIN_HOLDERS_FOR_VERDICT = 3; // below this, too little signal to judge either way
 
 // Some RPCs cap eth_getLogs to a much smaller range than BUYER_LOOKBACK_BLOCKS
-// in one request — confirmed live on Stable chain, which enforces a 500-block
-// max and errors with "maximum [from, to] blocks distance: 500" otherwise
-// (that chain also produces blocks roughly every 0.5s, so 500 blocks is still
-// a meaningful few minutes of real activity, not an unreasonably short probe
-// window). Tries the full range in one shot first — fast path for every
-// chain that doesn't need this — and only falls back to chunking on exactly
-// that failure mode, stopping as soon as enough buyer candidates are found
-// rather than exhaustively scanning the whole lookback window every time.
+// in one request. Two distinct flavors of this seen live:
+//   - Stable chain enforces a hard 500-block max ("maximum [from, to] blocks
+//     distance: 500"). Its ~0.5s blocks make 500 blocks a meaningful few
+//     minutes of real activity.
+//   - BSC's free public node (bsc-rpc.publicnode.com) rejects anything beyond
+//     roughly its last ~50 blocks of logs as an "Archive requests require a
+//     personal token" error — confirmed empirically (a 50-block address-
+//     filtered query returns logs; 200+ fails). Without adapting to that, the
+//     single-shot AND a fixed 500-block chunk both fail, and probeSellability
+//     silently returned "unknown" for every BSC token — i.e. the selective-
+//     honeypot gate was effectively disabled on the busiest, most honeypot-
+//     prone chain. The durable fix is a fuller RPC, but the probe should
+//     still use whatever recent window the node will serve rather than give
+//     up entirely.
+// Tries the full range in one shot first (fast path for a normal RPC), then
+// falls back to adaptive newest-first chunking that shrinks the window on a
+// range/archive error down to a floor, keeping whatever it can fetch. Never
+// throws from the fallback: returns whatever was gathered (possibly empty),
+// which the caller treats as "unknown", never "safe".
 const CHUNKED_FALLBACK_RANGE = 500;
+const MIN_CHUNK_RANGE = 25; // floor for the shrink — some free nodes only serve ~50 recent blocks of logs
+const MAX_CHUNK_REQUESTS = 40; // bound total getLogs calls so a tiny window can't fan out unbounded (rate limits)
+
+function isRangeLimitError(err) {
+  return /blocks? distance|block range|archive|personal token|response size|result set too large|limit exceeded/i.test(err?.message || "");
+}
 
 async function getBuyerTransferLogs(provider, tokenAddress, pairAddress, transferTopic, fromBlock, currentBlock) {
+  const topics = [transferTopic, zeroPadValue(pairAddress, 32)];
   try {
-    return await provider.getLogs({
-      address: tokenAddress,
-      topics: [transferTopic, zeroPadValue(pairAddress, 32)],
-      fromBlock,
-      toBlock: currentBlock,
-    });
+    return await provider.getLogs({ address: tokenAddress, topics, fromBlock, toBlock: currentBlock });
   } catch (err) {
-    if (!/blocks? distance/i.test(err.message) && !/block range/i.test(err.message)) throw err;
+    if (!isRangeLimitError(err)) throw err;
   }
 
-  // Caller expects ascending chronological order (same as a single
-  // getLogs call would return) and reverses it themselves to prioritize
-  // recent buyers — scanning newest-chunk-first here just bounds how much
-  // has to be fetched before there's enough to work with, not the final
-  // order, so everything gets sorted back into place before returning.
+  // Caller expects ascending chronological order (same as a single getLogs
+  // call would return) and reverses it itself to prioritize recent buyers —
+  // scanning newest-chunk-first here just bounds how much has to be fetched
+  // before there's enough to work with, not the final order, so everything
+  // gets sorted back into place before returning.
   const logs = [];
   let chunkEnd = currentBlock;
-  while (chunkEnd >= fromBlock && logs.length < MAX_BUYERS_TO_SCAN) {
-    const chunkStart = Math.max(fromBlock, chunkEnd - CHUNKED_FALLBACK_RANGE + 1);
-    const chunkLogs = await provider.getLogs({
-      address: tokenAddress,
-      topics: [transferTopic, zeroPadValue(pairAddress, 32)],
-      fromBlock: chunkStart,
-      toBlock: chunkEnd,
-    });
-    logs.push(...chunkLogs);
-    chunkEnd = chunkStart - 1;
+  let chunkSize = CHUNKED_FALLBACK_RANGE;
+  let requests = 0;
+  while (chunkEnd >= fromBlock && logs.length < MAX_BUYERS_TO_SCAN && requests < MAX_CHUNK_REQUESTS) {
+    const chunkStart = Math.max(fromBlock, chunkEnd - chunkSize + 1);
+    requests++;
+    try {
+      const chunkLogs = await provider.getLogs({ address: tokenAddress, topics, fromBlock: chunkStart, toBlock: chunkEnd });
+      logs.push(...chunkLogs);
+      chunkEnd = chunkStart - 1; // advance to the next-older window only on success
+    } catch (err) {
+      // Window still too wide for this node — halve it and retry the SAME
+      // (newest) window, down to the floor. Once shrunk, the smaller size
+      // carries forward to subsequent windows too.
+      if (isRangeLimitError(err) && chunkSize > MIN_CHUNK_RANGE) {
+        chunkSize = Math.max(MIN_CHUNK_RANGE, Math.floor(chunkSize / 2));
+        continue;
+      }
+      break; // even the floor window failed, or a non-range error — stop with whatever we have
+    }
   }
   logs.sort((a, b) => a.blockNumber - b.blockNumber || a.index - b.index);
   return logs;
