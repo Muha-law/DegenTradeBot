@@ -750,6 +750,34 @@ export function getClosedRealTrades(limit = 20) {
   return db.prepare("SELECT * FROM real_trades WHERE status = 'closed' ORDER BY exit_at DESC LIMIT ?").all(limit);
 }
 
+// Realized P&L bucketed by day-of-month for the PnL calendar. Groups closed
+// trades whose exit landed within the given month into { daily, total } where
+// daily is { [dayOfMonth]: usd }. Day boundaries are computed in the viewer's
+// local timezone (utcOffsetMinutes, e.g. +60 for UTC+1) so a trade that closed
+// at 11pm local doesn't land on the next UTC day. real_trades and paper_trades
+// share the exit_at/pnl_usd/status columns, so one query serves both — mode is
+// mapped to a fixed table name (never interpolated raw) to keep it injection-safe.
+export function getDailyPnl({ mode = "real", year, month, utcOffsetMinutes = 0 } = {}) {
+  const table = mode === "paper" ? "paper_trades" : "real_trades";
+  const offsetMs = utcOffsetMinutes * 60 * 1000;
+  // [startMs, endMs) is this local month expressed as absolute UTC instants.
+  const startMs = Date.UTC(year, month, 1) - offsetMs;
+  const endMs = Date.UTC(year, month + 1, 1) - offsetMs;
+  const rows = db
+    .prepare(`SELECT exit_at, pnl_usd FROM ${table} WHERE status = 'closed' AND exit_at >= ? AND exit_at < ? AND pnl_usd IS NOT NULL`)
+    .all(startMs, endMs);
+  const daily = {};
+  let total = 0;
+  let tradeCount = 0;
+  for (const r of rows) {
+    const localDay = new Date(r.exit_at + offsetMs).getUTCDate();
+    daily[localDay] = (daily[localDay] || 0) + r.pnl_usd;
+    total += r.pnl_usd;
+    tradeCount++;
+  }
+  return { daily, total, tradeCount };
+}
+
 // Tracks distinct Telegram users who've interacted with the bot, for the
 // "Bot Stats" live user count — recorded on every incoming update, not just
 // /start, so it stays accurate for users who never explicitly restarted.

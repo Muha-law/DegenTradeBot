@@ -19,6 +19,7 @@ import {
   closePaperTrade,
   getRealTradingStats,
   getClosedRealTrades,
+  getDailyPnl,
   getOpenRealTrades,
   getRealTradeById,
   closeRealTrade,
@@ -68,6 +69,7 @@ import { saveWalletPrivateKey } from "../walletSettings.js";
 import { sellToken, buyTokenWithNativeAmount, withSlippageRetry } from "../execution/swapExecutor.js";
 import { estimateV2PriceImpact } from "../risk/priceImpact.js";
 import { renderOpenCard, renderCloseCard } from "./tradeCard.js";
+import { renderPnlCalendar } from "./pnlCalendar.js";
 import { computeNftRiskScore } from "../risk/nftRisk.js";
 import { getContract } from "../risk/opensea.js";
 import { getNftChainKeys, getNftChainDefs } from "../nftChains.js";
@@ -431,7 +433,7 @@ function mainMenuKeyboard() {
       ? [[Markup.button.callback(`🖼 Real Trading — NFTs: ${nftRealEnabled ? "🔴 LIVE" : "⚪️ off"}`, "menu:nftrealtrading")]]
       : []),
     [Markup.button.callback("💳 Wallet Balance", "menu:walletbalance"), Markup.button.callback("🔑 Wallet Setup", "menu:wallet")],
-    [Markup.button.callback("📊 Bot Stats", "menu:botstats")],
+    [Markup.button.callback("📊 Bot Stats", "menu:botstats"), Markup.button.callback("📅 PnL Calendar", "menu:pnlcalendar")],
     ...(config.openseaApiKey ? [[Markup.button.callback("🖼 NFTs", "menu:nft")]] : []),
   ]);
 }
@@ -1603,6 +1605,79 @@ export function createBot(stats, chainControls, digestControls) {
   // to learn a group's chat ID short of a third-party bot, several of which
   // Telegram no longer allows into groups at all.
   bot.command("chatid", (ctx) => ctx.reply(`Chat ID: \`${ctx.chat.id}\`\nType: ${ctx.chat.type}`, { parse_mode: "Markdown" }));
+
+  // ---- PnL Calendar ----
+  // Day boundaries render in the viewer's local timezone. Set
+  // CALENDAR_UTC_OFFSET_MINUTES (e.g. 60 for UTC+1) so a trade that closed at
+  // 11pm local doesn't get bucketed onto the next UTC day; defaults to UTC.
+  const CALENDAR_MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+  ];
+  function calendarOffsetMinutes() {
+    const v = Number(process.env.CALENDAR_UTC_OFFSET_MINUTES);
+    return Number.isFinite(v) ? v : 0;
+  }
+  function localNowYearMonth() {
+    const d = new Date(Date.now() + calendarOffsetMinutes() * 60000);
+    return { year: d.getUTCFullYear(), month: d.getUTCMonth() };
+  }
+  function pnlCalendarKeyboard(year, month, mode) {
+    const prev = month === 0 ? { y: year - 1, m: 11 } : { y: year, m: month - 1 };
+    const next = month === 11 ? { y: year + 1, m: 0 } : { y: year, m: month + 1 };
+    const now = localNowYearMonth();
+    const otherMode = mode === "real" ? "paper" : "real";
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback("◀️", `pnlcal:${prev.y}:${prev.m}:${mode}`),
+        Markup.button.callback(mode === "real" ? "💰 Real" : "📄 Paper", `pnlcal:${year}:${month}:${otherMode}`),
+        Markup.button.callback("▶️", `pnlcal:${next.y}:${next.m}:${mode}`),
+      ],
+      [
+        Markup.button.callback("📅 This month", `pnlcal:${now.year}:${now.month}:${mode}`),
+        Markup.button.callback("🔙 Menu", "menu:home"),
+      ],
+    ]);
+  }
+  function buildCalendarPayload(year, month, mode) {
+    const { daily, total, tradeCount } = getDailyPnl({ mode, year, month, utcOffsetMinutes: calendarOffsetMinutes() });
+    const buffer = renderPnlCalendar({ year, month, mode, dailyPnl: daily, monthTotal: total });
+    const sign = total > 0 ? "+" : total < 0 ? "-" : "";
+    const caption =
+      `📅 *PnL Calendar* — ${CALENDAR_MONTH_NAMES[month]} ${year}\n` +
+      `${mode === "real" ? "💰 Real money" : "📄 Paper"} · ${tradeCount} closed trade${tradeCount === 1 ? "" : "s"} · ` +
+      `net ${sign}$${Math.abs(total).toFixed(2)}`;
+    return { buffer, caption };
+  }
+
+  bot.action("menu:pnlcalendar", async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    await ctx.answerCbQuery();
+    const { year, month } = localNowYearMonth();
+    // Coming from a text menu message — send a fresh photo message; the nav
+    // buttons below then edit THAT photo in place (see the pnlcal handler).
+    const { buffer, caption } = buildCalendarPayload(year, month, "real");
+    await ctx.replyWithPhoto({ source: buffer }, { caption, parse_mode: "Markdown", ...pnlCalendarKeyboard(year, month, "real") });
+  });
+
+  bot.action(/^pnlcal:(-?\d+):(\d+):(real|paper)$/, async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.answerCbQuery("Not authorized.");
+    await ctx.answerCbQuery();
+    const year = Number(ctx.match[1]);
+    const month = Number(ctx.match[2]);
+    const mode = ctx.match[3];
+    const { buffer, caption } = buildCalendarPayload(year, month, mode);
+    try {
+      await ctx.editMessageMedia(
+        { type: "photo", media: { source: buffer }, caption, parse_mode: "Markdown" },
+        pnlCalendarKeyboard(year, month, mode)
+      );
+    } catch (err) {
+      if (!/message is not modified/i.test(err.description || err.message || "")) {
+        console.error("[pnlCalendar] editMessageMedia failed:", err.message);
+      }
+    }
+  });
 
   bot.action("menu:botstats", async (ctx) => {
     await ctx.answerCbQuery();
