@@ -3,7 +3,7 @@ import { Wallet } from "ethers";
 import { config } from "../config.js";
 import { CHAINS } from "../chains.js";
 import { getActiveChainDefs, isChainEnabled } from "../chainSettings.js";
-import { isPaused, setPaused, isNftNotificationsEnabled, setNftNotificationsEnabled } from "../botState.js";
+import { isPaused, setPaused, isNftNotificationsEnabled, setNftNotificationsEnabled, isCallsChannelEnabled, setCallsChannelEnabled } from "../botState.js";
 import { loadFilters, saveFilters } from "../filters/filter.js";
 import { computeRiskScore } from "../risk/riskScore.js";
 import { getBestPair, pairSummary } from "../risk/dexscreener.js";
@@ -434,6 +434,12 @@ function mainMenuKeyboard() {
       : []),
     [Markup.button.callback("💳 Wallet Balance", "menu:walletbalance"), Markup.button.callback("🔑 Wallet Setup", "menu:wallet")],
     [Markup.button.callback("📊 Bot Stats", "menu:botstats"), Markup.button.callback("📅 PnL Calendar", "menu:pnlcalendar")],
+    [
+      Markup.button.callback(
+        isCallsChannelEnabled() ? "📢 Post calls to channel: ON (tap to mute)" : "🔇 Post calls to channel: OFF (tap to post)",
+        "menu:togglecallschannel"
+      ),
+    ],
     ...(config.openseaApiKey ? [[Markup.button.callback("🖼 NFTs", "menu:nft")]] : []),
   ]);
 }
@@ -1871,6 +1877,17 @@ export function createBot(stats, chainControls, digestControls) {
     await safeEdit(ctx, welcomeText(), mainMenuKeyboard());
   });
 
+  bot.action("menu:togglecallschannel", async (ctx) => {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery("Not authorized.");
+      return;
+    }
+    const now = !isCallsChannelEnabled();
+    setCallsChannelEnabled(now);
+    await ctx.answerCbQuery(now ? "Calls will now post to the channel" : "Calls muted — channel won't get them (you still do here)");
+    await safeEdit(ctx, welcomeText(), mainMenuKeyboard());
+  });
+
   bot.action("menu:status", async (ctx) => {
     await ctx.answerCbQuery();
     await safeEdit(ctx, renderStatusText(stats), refreshKeyboard("menu:status"));
@@ -3040,7 +3057,10 @@ export async function postCall(bot, { chain, tokenAddress, riskResult, name, sym
     console.error(`Failed to send call to primary chat:`, err.message);
   }
 
-  for (const destination of [...config.telegram.signalChannels, ...config.telegram.callsChannels]) {
+  // Channel broadcast is gated by the live toggle (menu:togglecallschannel) —
+  // the admin's own DM above always gets the call; this only controls whether
+  // it also goes out to the shared channel(s).
+  for (const destination of isCallsChannelEnabled() ? [...config.telegram.signalChannels, ...config.telegram.callsChannels] : []) {
     try {
       await bot.telegram.sendMessage(destination, baseMessage, { parse_mode: "Markdown" });
     } catch (err) {
@@ -3098,6 +3118,10 @@ export async function postCallAbort(bot, { chain, tokenAddress, name, symbol, re
   // chat: the admin already gets the full technical failure via
   // postAdminUpdate, this is the public-friendly version for followers who
   // may have acted on the original call.
+  // Only meaningful if calls are actually being published to the channel —
+  // if the admin has muted the channel (menu:togglecallschannel), there are no
+  // channel followers to warn, so skip it entirely (same live toggle as postCall).
+  if (!isCallsChannelEnabled()) return;
   const destinations = [...config.telegram.signalChannels, ...config.telegram.callsChannels];
   if (destinations.length === 0) return;
   const message = truncateForTelegram(

@@ -41,6 +41,20 @@ export function setNftNotificationsEnabled(enabled) {
   fs.writeFileSync(statePath, JSON.stringify({ ...state, nftNotificationsEnabled: enabled }, null, 2));
 }
 
+// Whether calls are also broadcast to the configured signal/calls channel(s),
+// on top of the admin's own DM (which always receives them). Toggleable live
+// from the Telegram menu so the public channel can be muted or resumed without
+// editing config or restarting. Off by default — publishing to a shared
+// channel is an explicit opt-in, not something that happens silently.
+export function isCallsChannelEnabled() {
+  return Boolean(readState().callsChannelEnabled);
+}
+
+export function setCallsChannelEnabled(enabled) {
+  const state = readState();
+  fs.writeFileSync(statePath, JSON.stringify({ ...state, callsChannelEnabled: enabled }, null, 2));
+}
+
 // One-shot flag for stalePriceRugCheck.js — once the post-filter-change
 // sample is big enough to report on, it should report exactly once, not
 // re-send every 6h forever afterward.
